@@ -1146,9 +1146,34 @@ class Enemy {
     this.shootRate=75+Math.random()*45;
     this.diveMode=0; this.vx=0; this.vy=this.speed;
     this.shoots=et.shoots;
+    this.isBoss=false; // 보스 플래그
   }
   update(px,py){
     this.phase+=0.04;
+    if(this.isBoss){
+      // 보스: 화면 상단 1/4 지점까지 내려온 후 좌우 진동
+      const holdY=110+this.h/2;
+      if(this.y<holdY){ this.y+=this.speed; }
+      else {
+        this.y=holdY;
+        // HP 감소할수록 더 빠르게 좌우 이동
+        const fury=1+(1-this.hp/this.maxHp)*2;
+        this.x+=Math.sin(this.phase*0.5)*3.5*fury;
+        // 가끔 급습 (HP 50% 이하)
+        if(this.hp/this.maxHp<0.5&&!this.diving){
+          if(Math.random()<0.003){ this.diving=true; this.dvx=((px-this.x)/80); this.dvy=5; }
+        }
+      }
+      if(this.diving){
+        this.x+=this.dvx; this.y+=this.dvy;
+        if(this.y>CH*0.5){ this.diving=false; this.y=holdY; this.x=Math.max(60,Math.min(CW-60,this.x)); }
+      }
+      this.x=Math.max(this.w/2,Math.min(CW-this.w/2,this.x));
+      this.shoots=true;
+      if(this.shootTimer>0) this.shootTimer--;
+      if(this.shootTimer<=0){ this.shootTimer=this.shootRate; return this._shoot(px,py); }
+      return null;
+    }
     switch(this.type){
       case 'minwon': this.y+=this.speed; this.x+=Math.sin(this.phase)*2.2; break;
       case 'gongmu': this.y+=this.speed; break;
@@ -1165,13 +1190,35 @@ class Enemy {
     return null;
   }
   _shoot(px,py){
+    const fury=this.isBoss?Math.max(1,1+(1-this.hp/this.maxHp)*2):1;
+    if(this.isBoss){
+      // 보스는 부채꼴 발사
+      const spread=this.type==='gyojang'?[0,-0.35,-0.7,0.35,0.7]:[0,-0.4,0.4,-0.8,0.8].slice(0,3);
+      return spread.map(da=>{const b=new Bullet(this.x,this.y+this.h/2,true,Math.PI/2+da);b.dmg=Math.ceil(fury);return b;});
+    }
     if(this.type==='gyojang') return [0,-0.38,0.38].map(da=>{const b=new Bullet(this.x,this.y+this.h/2,true,Math.PI/2+da);b.dmg=2;return b;});
     const b=new Bullet(this.x,this.y+this.h/2,true,Math.atan2(py-this.y,px-this.x));b.dmg=1;return[b];
   }
   draw(){
     ctx.save();
+    if(this.isBoss){
+      // 보스 오라 효과
+      const fury=1-this.hp/this.maxHp;
+      ctx.shadowBlur=20+fury*20; ctx.shadowColor=fury>0.5?'#FF2200':'#FF8800';
+      ctx.globalAlpha=0.25+fury*0.2;
+      ctx.fillStyle=fury>0.5?'#FF2200':'#FFAA00';
+      ctx.beginPath(); ctx.ellipse(this.x,this.y,this.w*0.7,this.h*0.8,0,0,Math.PI*2); ctx.fill();
+      ctx.globalAlpha=1;
+    }
     drawEnemyShape(ctx,this.type,this.x,this.y,this.w,this.h,this.hp,this.maxHp,this.phase);
-    if(this.maxHp>1){
+    if(this.isBoss){
+      // 보스 라벨
+      ctx.shadowBlur=8; ctx.shadowColor='#FF4400';
+      ctx.fillStyle='#FFD700'; ctx.font="bold 10px 'Malgun Gothic',sans-serif"; ctx.textAlign='center';
+      ctx.fillText('★ BOSS ★',this.x,this.y-this.h/2-14);
+      ctx.fillStyle='#FFA0A0'; ctx.font="8px 'Malgun Gothic',sans-serif";
+      ctx.fillText(this.label,this.x,this.y-this.h/2-4);
+    } else if(this.maxHp>1){
       const bw=this.w+6,bh=4,bx=this.x-bw/2,by=this.y-this.h/2-8;
       ctx.fillStyle='rgba(0,0,0,0.65)'; ctx.fillRect(bx,by,bw,bh);
       ctx.fillStyle=this.hp/this.maxHp>0.5?'#FF4444':'#FF8800';
@@ -1696,6 +1743,15 @@ const WAVE_DEFS={
   4:[{t:'gamri',c:4,f:'stagger',d:55},{t:'wonjang',c:3,f:'stagger',d:95},{t:'gyojang',c:2,f:'sides',d:210}],
   5:[{t:'gongmu',c:4,f:'line',d:45},{t:'gamri',c:4,f:'stagger',d:60},{t:'wonjang',c:3,f:'sides',d:95},{t:'gyojang',c:3,f:'stagger',d:190}]
 };
+// ===== 웨이브 보스 =====
+const WAVE_BOSSES={
+  1:{type:'gongmu', hpMult:10, scale:1.8, pts:2000, shootRate:50, label:'보스: 악덕 공무원 과장'},
+  2:{type:'gamri',  hpMult:12, scale:1.9, pts:3000, shootRate:45, label:'보스: 악덕 감리 팀장'},
+  3:{type:'wonjang',hpMult:12, scale:1.9, pts:4000, shootRate:45, label:'보스: 유치원 원장 원감'},
+  4:{type:'gyojang',hpMult:14, scale:2.0, pts:5000, shootRate:38, label:'보스: 악덕 교장 교감'},
+  5:{type:'gyojang',hpMult:18, scale:2.1, pts:8000, shootRate:30, label:'최종보스: 교육청 장학사'},
+};
+let bossSpawned=false, bossActive=null;
 class WaveManager {
   constructor(){this.queue=[];this.timer=0;}
   load(wn){
@@ -1745,6 +1801,7 @@ function initGame(){
   player=new Player(charName);
   bullets=[];enemies=[];explosions=[];bombItems=[];
   waveManager=new WaveManager();
+  bossSpawned=false; bossActive=null;
   state.score=0;state.lives=3;state.wave=1;
   state.waveBannerTimer=90;state.sessionXp=0;state.levelUpNotice=0;
   bombSpawnTimer=400;
@@ -1886,6 +1943,8 @@ function useBomb(){
   });
   enemies=[];
   bullets=bullets.filter(b=>!b.isEnemy);
+  // 장애물도 모두 제거
+  bgScrollItems.forEach(o=>{ if(o.maxHp>0) o.deadTimer=90; });
   // 폭탄 스탬프 애니메이션 시작
   bombAnim={
     timer:0, maxTimer:110,
@@ -1929,6 +1988,21 @@ function drawHUD(){
   // Bomb hint
   ctx.fillStyle='rgba(255,255,255,0.35)';ctx.font="10px 'Malgun Gothic',sans-serif";ctx.textAlign='left';
   ctx.fillText('X:폭탄',10,CH-8);
+  // 보스 HP바
+  if(bossActive&&bossActive.active){
+    const fury=1-bossActive.hp/bossActive.maxHp;
+    const bbw=CW-20, bbh=12, bbx=10, bby=42;
+    ctx.fillStyle='rgba(0,0,0,0.75)'; ctx.fillRect(bbx-2,bby-2,bbw+4,bbh+4);
+    const bg=ctx.createLinearGradient(bbx,0,bbx+bbw,0);
+    bg.addColorStop(0,fury>0.5?'#FF1100':'#FF6600');
+    bg.addColorStop(1,fury>0.5?'#FF5500':'#FFAA00');
+    ctx.fillStyle=bg; ctx.fillRect(bbx,bby,bbw*(bossActive.hp/bossActive.maxHp),bbh);
+    ctx.strokeStyle='rgba(255,150,0,0.6)'; ctx.lineWidth=1.5; ctx.strokeRect(bbx,bby,bbw,bbh);
+    ctx.shadowBlur=8; ctx.shadowColor='#FF4400';
+    ctx.fillStyle='#FFD700'; ctx.font="bold 9px 'Malgun Gothic',sans-serif"; ctx.textAlign='center';
+    ctx.fillText(`★ ${bossActive.label}  ${bossActive.hp} / ${bossActive.maxHp}`,CW/2,bby+9);
+    ctx.shadowBlur=0;
+  }
   // Level up notice
   if(state.levelUpNotice>0){
     ctx.save();ctx.globalAlpha=Math.min(1,state.levelUpNotice/30);
@@ -2371,43 +2445,137 @@ function drawGameOverScreen(){
   ctx.textAlign='left';
 }
 
-// ===== WAVE TRANSITION (1942 스타일) =====
-function startWaveTransition(nextWave){
+// ===== WAVE TRANSITION (스테이지 클리어 세레머니 + 1942 스타일 비행) =====
+function startWaveTransition(nextWave, unlockedTeamName){
   enemies=[]; bullets=bullets.filter(b=>!b.isEnemy); bombItems=[];
-  waveTransition={timer:0, nextWave};
+  bossSpawned=false; bossActive=null;
+  waveTransition={
+    timer:0, nextWave,
+    clearedWave: state.wave,
+    unlockedTeam: unlockedTeamName||null,
+    starBurst: Array.from({length:60},()=>({
+      angle:Math.random()*Math.PI*2, speed:1+Math.random()*4,
+      r:1+Math.random()*2.5, life:1,
+      color:`hsl(${40+Math.random()*40},100%,${60+Math.random()*30}%)`
+    }))
+  };
   state.current='waveTransition';
-  player.invincible=400; player.shootCd=400;
+  player.invincible=9999; player.shootCd=0;
 }
 
 function updateDrawWaveTransition(){
   const wt=waveTransition;
   wt.timer++;
   const T=wt.timer;
-  const PHASE1=65, PHASE2=130;
 
-  if(T<=PHASE1){
-    // 1단계: 레인져 위로 탈출 + 빠른 스크롤
-    bgY+=6;
-    updateObstaclePositions();
-    drawBackground(state.wave);
-    // 속도선 효과
-    ctx.save(); ctx.strokeStyle='rgba(180,220,255,0.18)'; ctx.lineWidth=1.5;
+  // ── Timing layout ──
+  const C_END=110;    // 0-110  : stage clear ceremony
+  const E_END=175;    // 111-175: exit flight (player flies up)
+  const SW=176;       // 176    : switch wave data
+  const N_END=240;    // 177-240: entry flight (player enters from bottom)
+
+  if(T<=C_END){
+    // ════ STAGE CLEAR CEREMONY ════
+    bgY+=0.8; updateObstaclePositions();
+    drawBackground(wt.clearedWave);
+
+    // Player stays visible (no movement during ceremony)
+    player.draw();
+
+    // Star burst particles
+    const starActive=wt.starBurst.filter(s=>s.life>0);
+    if(T<=60 && starActive.length){
+      ctx.save();
+      wt.starBurst.forEach(s=>{
+        if(s.life<=0) return;
+        s.cx=(s.cx||CW/2)+Math.cos(s.angle)*s.speed;
+        s.cy=(s.cy||CH/2-60)+Math.sin(s.angle)*s.speed;
+        s.life-=0.022;
+        ctx.globalAlpha=s.life;
+        ctx.fillStyle=s.color;
+        ctx.beginPath(); ctx.arc(s.cx,s.cy,s.r,0,Math.PI*2); ctx.fill();
+      });
+      ctx.restore();
+    }
+
+    // Dark overlay bar for text
+    const textA=Math.min(1, T/18);
+    ctx.save();
+    ctx.globalAlpha=textA*0.75;
+    ctx.fillStyle='rgba(0,0,0,1)';
+    ctx.fillRect(0, CH/2-130, CW, 160);
+    ctx.restore();
+
+    // ★ WAVE N CLEAR! ★
+    const pulse=1+Math.sin(T*0.18)*0.045;
+    ctx.save();
+    ctx.globalAlpha=Math.min(1, T/18);
+    ctx.textAlign='center';
+    ctx.shadowBlur=35; ctx.shadowColor='#FFD700';
+    ctx.fillStyle='#FFD700';
+    ctx.font=`bold ${Math.round(44*pulse)}px 'Malgun Gothic',sans-serif`;
+    ctx.fillText(`WAVE ${wt.clearedWave} CLEAR!`, CW/2, CH/2-75);
+
+    // Score line
+    ctx.shadowBlur=8; ctx.shadowColor='#44FFCC';
+    ctx.fillStyle='#AAFFDD';
+    ctx.font="bold 17px 'Malgun Gothic',sans-serif";
+    ctx.fillText(`점수  ${state.score.toLocaleString()}`, CW/2, CH/2-38);
+
+    // Divider
+    ctx.strokeStyle='rgba(255,215,0,0.35)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(70,CH/2-22); ctx.lineTo(CW-70,CH/2-22); ctx.stroke();
+
+    // Next wave hint (fade in after 30 frames)
+    if(T>28){
+      const na=Math.min(1,(T-28)/20);
+      ctx.globalAlpha=na;
+      ctx.fillStyle='rgba(160,210,255,0.85)';
+      ctx.font="15px 'Malgun Gothic',sans-serif";
+      ctx.fillText(`다음 → 웨이브 ${wt.nextWave}`, CW/2, CH/2+2);
+    }
+    ctx.restore();
+
+    // Team unlock banner (fade in after 35 frames)
+    if(wt.unlockedTeam && T>35){
+      const ua=Math.min(1,(T-35)/20);
+      ctx.save();
+      ctx.globalAlpha=ua;
+      ctx.fillStyle='rgba(0,25,70,0.92)';
+      ctx.beginPath(); ctx.roundRect(50, CH/2-200, 380, 44, 10); ctx.fill();
+      ctx.shadowBlur=14; ctx.shadowColor='#44AAFF';
+      ctx.fillStyle='#FFD700'; ctx.textAlign='center';
+      ctx.font="bold 13px 'Malgun Gothic',sans-serif";
+      ctx.fillText(`🔓 ${wt.unlockedTeam} 멤버 해금!`, CW/2, CH/2-178);
+      ctx.fillStyle='#88CCFF'; ctx.font="11px 'Malgun Gothic',sans-serif";
+      ctx.fillText('캐릭터 선택에서 새 멤버를 확인하세요', CW/2, CH/2-160);
+      ctx.restore();
+    }
+
+    drawHUD();
+
+  } else if(T<=E_END){
+    // ════ EXIT FLIGHT ════
+    const lt=T-C_END;
+    bgY+=6; updateObstaclePositions();
+    drawBackground(wt.clearedWave);
+    // Speed lines
+    ctx.save(); ctx.strokeStyle='rgba(180,220,255,0.16)'; ctx.lineWidth=1.5;
     for(let i=0;i<18;i++){
       const lx=Math.random()*CW;
       ctx.beginPath(); ctx.moveTo(lx,0); ctx.lineTo(lx+(Math.random()-0.5)*8,CH); ctx.stroke();
     }
     ctx.restore();
-    // 레인져 위로 날아감
-    const exitSpeed=4+T*0.14;
+    const exitSpeed=4+lt*0.15;
     player.y-=exitSpeed;
     if(player.y>-player.h) player.draw();
-    // 화면 어두워짐
-    const fadeA=Math.min(1,T/PHASE1*0.85);
+    // Fade to black
+    const fadeA=Math.min(1, lt/(E_END-C_END)*0.9);
     ctx.fillStyle=`rgba(0,0,20,${fadeA})`; ctx.fillRect(0,0,CW,CH);
-    // 웨이브 전환 텍스트
-    if(T>40){
-      const ta=(T-40)/25;
-      ctx.save(); ctx.globalAlpha=Math.min(1,ta);
+    // "이동 중" text
+    if(lt>25){
+      const ta=Math.min(1,(lt-25)/20);
+      ctx.save(); ctx.globalAlpha=ta;
       ctx.shadowBlur=20; ctx.shadowColor='#44BBFF';
       ctx.fillStyle='#88DDFF'; ctx.font="bold 28px 'Malgun Gothic',sans-serif"; ctx.textAlign='center';
       ctx.fillText(`웨이브 ${wt.nextWave}`,CW/2,CH/2-10);
@@ -2415,34 +2583,37 @@ function updateDrawWaveTransition(){
       ctx.fillText('다음 스테이지로 이동 중...',CW/2,CH/2+20);
       ctx.restore();
     }
-  } else if(T===PHASE1+1){
-    // 배경 전환
+    drawHUD();
+
+  } else if(T===SW){
+    // ════ WAVE SWITCH ════
     state.wave=wt.nextWave;
     genBgObjs(state.wave);
     player.x=CW/2; player.y=CH+80;
-  } else if(T<=PHASE2){
-    // 2단계: 새 배경에서 레인져 아래서 등장
+
+  } else if(T<=N_END){
+    // ════ ENTRY FLIGHT ════
     bgY+=3; updateObstaclePositions();
     drawBackground(state.wave);
-    const progress=(T-PHASE1)/( PHASE2-PHASE1);
-    const ease=1-Math.pow(1-progress,2); // ease-out
+    const progress=(T-SW)/(N_END-SW);
+    const ease=1-Math.pow(1-progress,2);
     player.y=CH+80-(CH+80-530)*ease;
     player.draw();
-    // 웨이브 배너
-    const ba=Math.min(1,(T-PHASE1)/20);
+    const ba=Math.min(1,(T-SW)/20);
     ctx.save(); ctx.globalAlpha=ba;
     ctx.shadowBlur=22; ctx.shadowColor='#44BBFF';
     ctx.fillStyle='#55CCFF'; ctx.font="bold 36px 'Malgun Gothic',sans-serif"; ctx.textAlign='center';
     ctx.fillText(`웨이브 ${wt.nextWave}`,CW/2,CH/2);
     ctx.restore();
+    drawHUD();
+
   } else {
-    // 전환 완료
+    // ════ TRANSITION COMPLETE ════
     player.y=530; player.invincible=120; player.shootCd=0;
     waveTransition=null;
     state.current='playing';
     state.waveBannerTimer=90;
   }
-  drawHUD();
 }
 
 // ===== BOMB STAMP ANIMATION =====
@@ -2577,26 +2748,37 @@ function updateGame(){
   enemies=enemies.filter(e=>e.active);
   explosions=explosions.filter(e=>e.active);
   bombItems=bombItems.filter(bi=>bi.active);
-  // Wave complete
+  // Wave complete logic
   if(state.waveBannerTimer===0&&waveManager.isDone(enemies)){
-    // 팀 퀘스트 해금 체크: 현재 플레이어 팀의 questWave를 방금 클리어했는지
-    if(player){
-      const tKey=getTeamKey(player.name);
-      const tDef=TEAMS[tKey];
-      if(tDef&&state.wave>=tDef.questWave&&!(save.teamUnlocked&&save.teamUnlocked[tKey])){
-        if(!save.teamUnlocked) save.teamUnlocked={};
-        save.teamUnlocked[tKey]=true;
-        saveSave();
-        // 해금 메시지 (unlockMsg 변수 재활용)
-        unlockMsg=240;
+    if(!bossSpawned){
+      // 잡몹 처치 완료 → 보스 등장
+      const bdef=WAVE_BOSSES[Math.min(state.wave,5)];
+      const boss=new Enemy(CW/2,-90,bdef.type,state.wave);
+      boss.isBoss=true;
+      boss.w=Math.round(boss.w*bdef.scale);
+      boss.h=Math.round(boss.h*bdef.scale);
+      boss.maxHp=boss.hp=Math.round(boss.maxHp*bdef.hpMult);
+      boss.points=bdef.pts; boss.label=bdef.label;
+      boss.speed=1.5; boss.shootRate=bdef.shootRate;
+      boss.shootTimer=80; boss.shoots=true;
+      enemies.push(boss); bossActive=boss; bossSpawned=true;
+    } else if(enemies.length===0){
+      // 보스도 처치 → 웨이브 클리어
+      bossActive=null;
+      let unlockedTeamName=null;
+      // 팀 퀘스트 해금 체크
+      if(player){
+        const tKey=getTeamKey(player.name), tDef=TEAMS[tKey];
+        if(tDef&&state.wave>=tDef.questWave&&!(save.teamUnlocked&&save.teamUnlocked[tKey])){
+          if(!save.teamUnlocked) save.teamUnlocked={};
+          save.teamUnlocked[tKey]=true; saveSave(); unlockMsg=240;
+          unlockedTeamName=tDef.name;
+        }
       }
+      if(state.wave===5&&!save.allStagesCleared){ save.allStagesCleared=true; saveSave(); }
+      bossSpawned=false;
+      startWaveTransition(state.wave+1, unlockedTeamName);
     }
-    // 전체 스테이지 5 클리어 기록
-    if(state.wave===5&&!save.allStagesCleared){
-      save.allStagesCleared=true;saveSave();
-    }
-    // 1942 스타일 웨이브 전환 애니메이션 시작
-    startWaveTransition(state.wave+1);
   }
 }
 
