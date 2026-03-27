@@ -101,40 +101,52 @@ const CW=480, CH=640;
 const SECRET_CHAR = '이선빈';
 
 const TEAMS = {
+  // questWave: 해당 팀 캐릭터로 이 웨이브를 클리어하면 팀 잠금 해금
   construction:{name:'공사안전팀',color:'#FF7700',icon:'🏗',
     members:['임성빈','송광석','김지은','김선일'],
     stats:{maxHp:75,dmg:2,luck:1},missile:'heavy',shootRate:14,
-    missileNames:['중폭탄','강화중폭탄','폭발탄'],locked:false},
+    missileNames:['중폭탄','강화중폭탄','폭발탄'],questWave:3},
   design:{name:'설계안전팀',color:'#4488FF',icon:'📐',
     members:['소재혁','이승민','한지연'],
     stats:{maxHp:60,dmg:1,luck:3},missile:'homing',shootRate:12,
-    missileNames:['유도미사일','고속유도','쌍발유도'],locked:true},
+    missileNames:['유도미사일','고속유도','쌍발유도'],questWave:4},
   structural:{name:'구조안전팀',color:'#44CC44',icon:'🏛',
     members:['허재','장혜진','이남경','박미진'],
     stats:{maxHp:100,dmg:1,luck:1},missile:'spread',shootRate:14,
-    missileNames:['3방향탄','5방향탄','7방향탄'],locked:false},
+    missileNames:['3방향탄','5방향탄','7방향탄'],questWave:3},
   management:{name:'경영지원팀',color:'#FF44FF',icon:'💼',
     members:['이선빈','차재인'],
     stats:{maxHp:70,dmg:2,luck:2},missile:'laser',shootRate:7,
-    missileNames:['레이저','레이저 2발','레이저 3발'],locked:false},
+    missileNames:['레이저','레이저 2발','레이저 3발'],questWave:5},
   marketing:{name:'마케팅팀',color:'#FFCC00',icon:'📊',
     members:['이민호','조현희','김도영'],
     stats:{maxHp:70,dmg:2,luck:2},missile:'twin',shootRate:11,
-    missileNames:['쌍발탄','3발탄','4발탄'],locked:false},
+    missileNames:['쌍발탄','3발탄','4발탄'],questWave:4},
   facility:{name:'시설안전팀',color:'#00CCCC',icon:'🔧',
     members:['김영호','이성용'],
     stats:{maxHp:70,dmg:1,luck:4},missile:'critical',shootRate:13,
-    missileNames:['크리탄','관통탄','관통크리탄'],locked:true}
+    missileNames:['크리탄','관통탄','관통크리탄'],questWave:5}
 };
 function getTeam(n){
   for(const t of Object.values(TEAMS)) if(t.members.includes(n)) return t;
   return TEAMS.construction;
 }
-function charTier(n){ return n===SECRET_CHAR?'secret':getTeam(n).locked?'unlocked':'starter'; }
-// Derived availability arrays for backward compat
+function getTeamKey(n){
+  for(const [k,t] of Object.entries(TEAMS)) if(t.members.includes(n)) return k;
+  return 'construction';
+}
+// 개별 캐릭터 단위 해금 관리
+const STARTER_CHARS=['김도영','김선일','김지은','박미진','이남경','이성용','장혜진','조현희','한지연'];
+const UNLOCK_CHARS =['김영호','소재혁','송광석','이민호','이승민','임성빈','차재인','허재'];
+function charTier(n){ return n===SECRET_CHAR?'secret':UNLOCK_CHARS.includes(n)?'unlocked':'starter'; }
+// 특정 캐릭터가 현재 해금됐는지 판단 (팀 퀘스트 기반)
+function isCharUnlocked(n){
+  if(n===SECRET_CHAR) return save.secretUnlocked;
+  if(STARTER_CHARS.includes(n)) return true;
+  if(UNLOCK_CHARS.includes(n)) return !!(save.teamUnlocked&&save.teamUnlocked[getTeamKey(n)]);
+  return false;
+}
 const ALL_CHARS=Object.values(TEAMS).flatMap(t=>t.members);
-const STARTER_CHARS=ALL_CHARS.filter(n=>n!==SECRET_CHAR&&!getTeam(n).locked);
-const UNLOCK_CHARS =ALL_CHARS.filter(n=>n!==SECRET_CHAR&&getTeam(n).locked);
 function getCharByIndex(idx){
   let i=0;
   for(const t of Object.values(TEAMS)){
@@ -149,7 +161,7 @@ function hexToRgba(hex,a){
 
 // ===== ACCOUNT & SAVE SYSTEM =====
 let currentUser = null;
-let save = {hiScore:0, allStagesCleared:false, secretUnlocked:false, charData:{}};
+let save = {hiScore:0, allStagesCleared:false, secretUnlocked:false, teamUnlocked:{}, charData:{}};
 
 // --- 계정 관리 ---
 function getAccounts(){ try{return JSON.parse(localStorage.getItem('euddeum_accounts')||'{}');}catch{return {};} }
@@ -162,9 +174,12 @@ async function hashPw(pw){
 
 function loadUserSave(){
   if(!currentUser) return;
-  try{ save=JSON.parse(localStorage.getItem(`euddeum_save_${currentUser}`)||'null')||
-    {hiScore:0,allStagesCleared:false,secretUnlocked:false,charData:{}}; }
-  catch{ save={hiScore:0,allStagesCleared:false,secretUnlocked:false,charData:{}}; }
+  try{
+    save=JSON.parse(localStorage.getItem(`euddeum_save_${currentUser}`)||'null')||
+      {hiScore:0,allStagesCleared:false,secretUnlocked:false,teamUnlocked:{},charData:{}};
+    if(!save.teamUnlocked) save.teamUnlocked={};
+    if(!save.charData) save.charData={};
+  }catch{ save={hiScore:0,allStagesCleared:false,secretUnlocked:false,teamUnlocked:{},charData:{}}; }
 }
 function saveSave(){
   if(!currentUser) return;
@@ -259,14 +274,14 @@ function getStats(n){
     dodge:0.10+t.stats.luck*0.01+cd.sLuck*0.02, level:cd.level };
 }
 function getAvailableChars(){
-  const c=[];
-  for(const t of Object.values(TEAMS)){
-    if(t.locked&&!save.allStagesCleared) continue;
-    for(const name of t.members){
-      if(name===SECRET_CHAR&&!save.secretUnlocked) continue;
-      c.push(name);
+  const c=[...STARTER_CHARS]; // 항상 열려있는 9명
+  // 팀 퀘스트 클리어 시 해당 팀 해금 캐릭터 추가
+  for(const [key,team] of Object.entries(TEAMS)){
+    if(save.teamUnlocked&&save.teamUnlocked[key]){
+      team.members.forEach(n=>{ if(UNLOCK_CHARS.includes(n)&&!c.includes(n)) c.push(n); });
     }
   }
+  if(save.secretUnlocked) c.push(SECRET_CHAR); // 이선빈 비밀코드
   return c;
 }
 
@@ -1961,80 +1976,85 @@ function drawCharSelectScreen(){
     const team=TEAMS[tkey];
     const ty=startY+ti*teamH;
     const headerH=20;
-    const teamLocked=team.locked&&!save.allStagesCleared;
+    // 팀 내 모든 멤버가 잠겨있는지 체크 (헤더 색상용)
+    const allMembersLocked=team.members.every(n=>{
+      if(n===SECRET_CHAR) return !save.secretUnlocked;
+      if(UNLOCK_CHARS.includes(n)) return !save.allStagesCleared;
+      return false;
+    });
 
     // Team header bar
     const tg=ctx.createLinearGradient(0,ty,CW,ty);
-    tg.addColorStop(0,hexToRgba(team.color,teamLocked?0.15:0.4));
-    tg.addColorStop(1,hexToRgba(team.color,teamLocked?0.05:0.15));
+    tg.addColorStop(0,hexToRgba(team.color,allMembersLocked?0.15:0.4));
+    tg.addColorStop(1,hexToRgba(team.color,allMembersLocked?0.05:0.15));
     ctx.fillStyle=tg; ctx.fillRect(0,ty,CW,headerH);
-    ctx.strokeStyle=hexToRgba(team.color,teamLocked?0.2:0.5);
+    ctx.strokeStyle=hexToRgba(team.color,allMembersLocked?0.2:0.5);
     ctx.lineWidth=1; ctx.strokeRect(0,ty,CW,headerH);
 
     // Team name + icon
-    ctx.fillStyle=teamLocked?'rgba(255,255,255,0.25)':team.color;
+    ctx.fillStyle=allMembersLocked?'rgba(255,255,255,0.25)':team.color;
     ctx.font="bold 11px 'Malgun Gothic',sans-serif";ctx.textAlign='left';
     ctx.fillText(`${team.icon} ${team.name}`,8,ty+13);
 
     // Stats + missile info
-    const evo=state.selectedChar>=0&&getCharByIndex(state.selectedChar)&&getTeam(getCharByIndex(state.selectedChar))===team
-      ?getMissileEvo(getCharByIndex(state.selectedChar)):1;
-    ctx.fillStyle=teamLocked?'rgba(255,255,255,0.15)':'rgba(255,255,255,0.65)';
+    ctx.fillStyle=allMembersLocked?'rgba(255,255,255,0.15)':'rgba(255,255,255,0.65)';
     ctx.font="9px 'Malgun Gothic',sans-serif";ctx.textAlign='right';
     ctx.fillText(`HP:${team.stats.maxHp} 공:${team.stats.dmg} 운:${team.stats.luck}  🚀${team.missileNames[0]}→${team.missileNames[2]}`,CW-6,ty+13);
 
-    if(teamLocked){
-      ctx.fillStyle='rgba(0,0,0,0.5)';ctx.fillRect(0,ty+headerH,CW,teamH-headerH);
-      ctx.fillStyle='rgba(255,255,255,0.25)';ctx.font="10px 'Malgun Gothic',sans-serif";ctx.textAlign='center';
-      ctx.fillText('🔒 5스테이지 클리어 후 해금',CW/2,ty+headerH+32);
-      charIdx+=team.members.length;
-    } else {
-      const members=team.members;
-      const totalW=members.length*(cellW+4)-4;
-      const px=(CW-totalW)/2;
-      members.forEach((name,mi)=>{
-        const cx=px+mi*(cellW+4);
-        const cy=ty+headerH+2;
-        const isSecret=name===SECRET_CHAR;
-        const memberLocked=isSecret&&!save.secretUnlocked;
-        const hov=!memberLocked&&mouse.x>=cx&&mouse.x<=cx+cellW&&mouse.y>=cy&&mouse.y<=cy+cellH;
-        if(hov) state.hoveredChar=charIdx;
-        const sel=state.selectedChar===charIdx;
+    // 개별 캐릭터 렌더링
+    const members=team.members;
+    const totalW=members.length*(cellW+4)-4;
+    const px=(CW-totalW)/2;
+    members.forEach((name,mi)=>{
+      const cx=px+mi*(cellW+4);
+      const cy=ty+headerH+2;
+      // 개별 잠금 여부 판단
+      const isSecret=name===SECRET_CHAR;
+      const isUnlock=UNLOCK_CHARS.includes(name);
+      const memberLocked=!isCharUnlocked(name);
+      const hov=!memberLocked&&mouse.x>=cx&&mouse.x<=cx+cellW&&mouse.y>=cy&&mouse.y<=cy+cellH;
+      if(hov) state.hoveredChar=charIdx;
+      const sel=state.selectedChar===charIdx;
 
-        if(memberLocked){
-          ctx.fillStyle='rgba(80,0,100,0.7)';ctx.fillRect(cx,cy,cellW,cellH);
-          ctx.strokeStyle='rgba(200,80,255,0.4)';ctx.lineWidth=1;ctx.strokeRect(cx,cy,cellW,cellH);
-          ctx.font="16px sans-serif";ctx.textAlign='center';ctx.fillStyle='rgba(255,100,255,0.5)';
-          ctx.fillText('🔒',cx+cellW/2,cy+cellH/2+6);
-          ctx.fillStyle='rgba(200,100,255,0.4)';ctx.font="7px 'Malgun Gothic',sans-serif";
-          ctx.fillText('비밀해금',cx+cellW/2,cy+cellH+9);
-        } else {
-          ctx.save();
-          if(sel){ctx.shadowBlur=12;ctx.shadowColor=team.color;ctx.strokeStyle=team.color;ctx.lineWidth=2.5;ctx.strokeRect(cx,cy,cellW,cellH);}
-          else if(hov){ctx.strokeStyle=hexToRgba(team.color,0.8);ctx.lineWidth=1.5;ctx.strokeRect(cx,cy,cellW,cellH);}
-          ctx.fillStyle='rgba(0,10,25,0.8)';ctx.fillRect(cx,cy,cellW,cellH);
-          const img=images[name];
-          if(img&&img.complete&&img.naturalWidth>0){
-            const sc=Math.min(cellW/img.naturalWidth,cellH/img.naturalHeight);
-            const dw=img.naturalWidth*sc,dh=img.naturalHeight*sc;
-            ctx.drawImage(img,cx+(cellW-dw)/2,cy+(cellH-dh)/2,dw,dh);
-          }
-          ctx.restore();
-          // Level badge
-          const cd=getCD(name);
-          ctx.fillStyle='rgba(0,0,0,0.7)';ctx.fillRect(cx,cy,cellW,11);
-          ctx.fillStyle=sel?team.color:'rgba(255,255,255,0.5)';
-          ctx.font="bold 8px 'Malgun Gothic',sans-serif";ctx.textAlign='left';
-          ctx.fillText(`Lv.${cd.level}`,cx+2,cy+8);
-          if(cd.pts>0){ctx.fillStyle='#FFFF44';ctx.textAlign='right';ctx.fillText('★',cx+cellW-2,cy+8);}
-          // Name
-          ctx.fillStyle=sel?team.color:hov?hexToRgba(team.color,0.9):'#AABBCC';
-          ctx.font=`${sel?'bold ':''}8px 'Malgun Gothic',sans-serif`;ctx.textAlign='center';
-          ctx.fillText(name,cx+cellW/2,cy+cellH+9);
+      if(memberLocked){
+        // 잠금 오버레이
+        ctx.fillStyle=isSecret?'rgba(80,0,100,0.7)':'rgba(0,20,50,0.7)';
+        ctx.fillRect(cx,cy,cellW,cellH);
+        ctx.strokeStyle=isSecret?'rgba(200,80,255,0.3)':'rgba(50,100,180,0.3)';
+        ctx.lineWidth=1;ctx.strokeRect(cx,cy,cellW,cellH);
+        ctx.font="14px sans-serif";ctx.textAlign='center';
+        ctx.fillStyle=isSecret?'rgba(255,100,255,0.5)':'rgba(80,150,255,0.5)';
+        ctx.fillText('🔒',cx+cellW/2,cy+cellH/2+2);
+        ctx.fillStyle=isSecret?'rgba(200,100,255,0.45)':'rgba(80,150,255,0.45)';
+        ctx.font="7px 'Malgun Gothic',sans-serif";
+        const hint=isSecret?'비밀코드':`W${team.questWave}클리어`;
+        ctx.fillText(hint,cx+cellW/2,cy+cellH+9);
+      } else {
+        ctx.save();
+        if(sel){ctx.shadowBlur=12;ctx.shadowColor=team.color;ctx.strokeStyle=team.color;ctx.lineWidth=2.5;ctx.strokeRect(cx,cy,cellW,cellH);}
+        else if(hov){ctx.strokeStyle=hexToRgba(team.color,0.8);ctx.lineWidth=1.5;ctx.strokeRect(cx,cy,cellW,cellH);}
+        ctx.fillStyle='rgba(0,10,25,0.8)';ctx.fillRect(cx,cy,cellW,cellH);
+        const img=images[name];
+        if(img&&img.complete&&img.naturalWidth>0){
+          const sc=Math.min(cellW/img.naturalWidth,cellH/img.naturalHeight);
+          const dw=img.naturalWidth*sc,dh=img.naturalHeight*sc;
+          ctx.drawImage(img,cx+(cellW-dw)/2,cy+(cellH-dh)/2,dw,dh);
         }
-        charIdx++;
-      });
-    }
+        ctx.restore();
+        // Level badge
+        const cd=getCD(name);
+        ctx.fillStyle='rgba(0,0,0,0.7)';ctx.fillRect(cx,cy,cellW,11);
+        ctx.fillStyle=sel?team.color:'rgba(255,255,255,0.5)';
+        ctx.font="bold 8px 'Malgun Gothic',sans-serif";ctx.textAlign='left';
+        ctx.fillText(`Lv.${cd.level}`,cx+2,cy+8);
+        if(cd.pts>0){ctx.fillStyle='#FFFF44';ctx.textAlign='right';ctx.fillText('★',cx+cellW-2,cy+8);}
+        // Name
+        ctx.fillStyle=sel?team.color:hov?hexToRgba(team.color,0.9):'#AABBCC';
+        ctx.font=`${sel?'bold ':''}8px 'Malgun Gothic',sans-serif`;ctx.textAlign='center';
+        ctx.fillText(name,cx+cellW/2,cy+cellH+9);
+      }
+      charIdx++;
+    });
   });
 
   // Bottom panel
@@ -2102,13 +2122,21 @@ function drawCharSelectScreen(){
     ctx.restore();secretMsg--;
   }
   if(unlockMsg>0){
+    // 가장 최근 해금된 팀 찾기
+    let lastTeamName='';
+    for(const [k,t] of Object.entries(TEAMS)){
+      if(save.teamUnlocked&&save.teamUnlocked[k]){
+        const locked=t.members.filter(n=>UNLOCK_CHARS.includes(n));
+        if(locked.length) lastTeamName=`${t.name} (${locked.join(', ')}) 해금!`;
+      }
+    }
     ctx.save();ctx.globalAlpha=Math.min(1,unlockMsg/30);
-    ctx.fillStyle='rgba(0,40,80,0.9)';ctx.beginPath();ctx.roundRect(40,panelY-50,400,44,8);ctx.fill();
+    ctx.fillStyle='rgba(0,30,70,0.92)';ctx.beginPath();ctx.roundRect(30,panelY-52,420,46,8);ctx.fill();
     ctx.shadowBlur=15;ctx.shadowColor='#44AAFF';
-    ctx.fillStyle='#44AAFF';ctx.font="bold 14px 'Malgun Gothic',sans-serif";ctx.textAlign='center';
-    ctx.fillText('설계안전팀·시설안전팀 해금!',CW/2,panelY-30);
+    ctx.fillStyle='#44AAFF';ctx.font="bold 13px 'Malgun Gothic',sans-serif";ctx.textAlign='center';
+    ctx.fillText('🔓 새 레인져 해금!',CW/2,panelY-32);
     ctx.fillStyle='#88CCFF';ctx.font="10px 'Malgun Gothic',sans-serif";
-    ctx.fillText('모든 스테이지 클리어 달성!',CW/2,panelY-14);
+    ctx.fillText(lastTeamName||'팀 퀘스트 달성!',CW/2,panelY-14);
     ctx.restore();unlockMsg--;
   }
   ctx.textAlign='left';
@@ -2356,9 +2384,21 @@ function updateGame(){
   bombItems=bombItems.filter(bi=>bi.active);
   // Wave complete
   if(state.waveBannerTimer===0&&waveManager.isDone(enemies)){
-    // Check if wave 5 just cleared
+    // 팀 퀘스트 해금 체크: 현재 플레이어 팀의 questWave를 방금 클리어했는지
+    if(player){
+      const tKey=getTeamKey(player.name);
+      const tDef=TEAMS[tKey];
+      if(tDef&&state.wave>=tDef.questWave&&!(save.teamUnlocked&&save.teamUnlocked[tKey])){
+        if(!save.teamUnlocked) save.teamUnlocked={};
+        save.teamUnlocked[tKey]=true;
+        saveSave();
+        // 해금 메시지 (unlockMsg 변수 재활용)
+        unlockMsg=240;
+      }
+    }
+    // 전체 스테이지 5 클리어 기록
     if(state.wave===5&&!save.allStagesCleared){
-      save.allStagesCleared=true;saveSave();unlockMsg=300;
+      save.allStagesCleared=true;saveSave();
     }
     state.wave++;
     state.waveBannerTimer=90;
