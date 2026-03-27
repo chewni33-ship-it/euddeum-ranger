@@ -742,15 +742,25 @@ function genBgObjs(wave){
       type:t, x:20+Math.random()*(CW-40),
       spd:0.8+Math.random()*1.4, phase:Math.random()*Math.PI*2,
       hp:p.hp, maxHp:p.hp, w:p.w, h:p.h, pts:p.pts,
-      hitFlash:0, screenY
+      hitFlash:0, deadTimer:0, screenY
     });
   }
 }
 // Update obstacle screenY directly each frame (stable, no bgY formula)
 function updateObstaclePositions(){
   bgScrollItems.forEach(o=>{
+    if(o.deadTimer>0){
+      o.deadTimer--;
+      if(o.deadTimer===0){
+        // 죽은 후 화면 위쪽에서 다시 스폰
+        o.hp=o.maxHp;
+        o.screenY=-60-Math.random()*180;
+        o.x=20+Math.random()*(CW-40);
+      }
+      return; // 죽은 동안은 움직이지 않음
+    }
     o.screenY += o.spd;
-    if(o.screenY > CH+50) o.screenY = -40 - Math.random()*150;
+    if(o.screenY > CH+60) o.screenY = -40 - Math.random()*150;
     if(o.hitFlash>0) o.hitFlash--;
   });
 }
@@ -828,20 +838,31 @@ function drawBackground(wave){
   ctx.drawImage(getBg(si),0,0);
   // Scrolling obstacle-enemies
   bgScrollItems.forEach(o=>{
+    if(o.deadTimer>0) return; // 죽은 장애물은 그리지 않음
     o.phase+=0.04;
-    const dy=o.screenY; // already updated by updateObstaclePositions()
+    const dy=o.screenY;
+    if(dy<-o.h-10||dy>CH+o.h+10) return; // 화면 밖은 스킵
     drawScrollItem(o,dy);
-    // Draw danger glow for collidable obstacles
-    if(o.maxHp>0 && o.hp>0 && dy>-20 && dy<CH+20){
+    // 충돌 가능한 장애물에 위험 글로우 + HP바
+    if(o.maxHp>0){
       ctx.save();
-      ctx.shadowBlur=8; ctx.shadowColor='rgba(255,80,80,0.7)';
-      ctx.strokeStyle=`rgba(255,${o.maxHp>1?100:60},60,0.55)`;
+      // hitFlash 효과
+      if(o.hitFlash>0){
+        ctx.globalAlpha=o.hitFlash/10*0.7;
+        ctx.fillStyle='#FF4444';
+        ctx.fillRect(o.x-o.w/2-2,dy-o.h/2-2,o.w+4,o.h+4);
+        ctx.globalAlpha=1;
+      }
+      ctx.shadowBlur=6; ctx.shadowColor='rgba(255,80,80,0.6)';
+      ctx.strokeStyle=`rgba(255,${o.maxHp>1?120:70},60,0.5)`;
       ctx.lineWidth=1.5;
       ctx.strokeRect(o.x-o.w/2,dy-o.h/2,o.w,o.h);
-      // Mini HP bar (only if maxHp>1)
+      // HP바: maxHp>1 이면 표시
       if(o.maxHp>1){
-        ctx.fillStyle='rgba(0,0,0,0.6)'; ctx.fillRect(o.x-o.w/2,dy-o.h/2-5,o.w,3);
-        ctx.fillStyle='#FF4444'; ctx.fillRect(o.x-o.w/2,dy-o.h/2-5,o.w*(o.hp/o.maxHp),3);
+        const bw=Math.max(o.w,20);
+        ctx.fillStyle='rgba(0,0,0,0.7)'; ctx.fillRect(o.x-bw/2,dy-o.h/2-5,bw,3);
+        const hpColor=o.hp/o.maxHp>0.5?'#44FF44':'#FF4444';
+        ctx.fillStyle=hpColor; ctx.fillRect(o.x-bw/2,dy-o.h/2-5,bw*(o.hp/o.maxHp),3);
       }
       ctx.restore();
     }
@@ -1716,6 +1737,8 @@ let player=null, bullets=[], enemies=[], explosions=[], bombItems=[];
 let waveManager=null;
 let bombSpawnTimer=300;
 let prevBombKey=false, prevStatKey=false;
+let waveTransition=null; // {timer, nextWave}
+let bombAnim=null;       // {timer, maxTimer, rotations[]}
 
 function initGame(){
   const charName=getCharByIndex(state.selectedChar)||getAvailableChars()[0];
@@ -1785,32 +1808,29 @@ function checkCollisions(){
   }
   // Background obstacle-enemies: hit by player bullets or contact with player
   for(const o of bgScrollItems){
-    if(o.maxHp<=0||o.hp<=0) continue; // non-collidable or already destroyed
+    if(o.maxHp<=0||o.deadTimer>0) continue; // 비-충돌 또는 죽은 상태 스킵
     const ob={x:o.x-o.w/2, y:o.screenY-o.h/2, w:o.w, h:o.h};
-    // Player bullets
+    // Player bullets vs obstacle
     for(const b of bullets){
       if(b.isEnemy||!b.active) continue;
       if(rects(b.getBounds(),ob)){
-        b.active=false;
+        if(b.piercing>0) b.piercing--; else b.active=false;
         o.hp--;
-        o.hitFlash=8;
+        o.hitFlash=10;
         if(o.hp<=0){
           explosions.push(new Explosion(o.x,o.screenY,'small'));
           state.score+=o.pts;
           gainXp(o.pts/5);
-          // Respawn obstacle from top after short delay (reset position)
-          o.hp=o.maxHp;
-          o.y=(-80-(Math.random()*200)); // off-screen top, will scroll back in
+          o.deadTimer=45; // 45프레임 후 화면 위에서 재등장
         }
         break;
       }
     }
     // Contact with player
-    if(player.invincible<=0 && o.hp>0){
+    if(player.invincible<=0 && o.hp>0 && o.deadTimer===0){
       if(rects(ob,player.getBounds())){
         explosions.push(new Explosion(o.x,o.screenY,'small'));
-        o.hp=o.maxHp;
-        o.y=(-80-(Math.random()*200));
+        o.deadTimer=45;
         if(Math.random()<player.dodge){ player.dodgeMsg=40; }
         else { playerTakeDamage(10); }
       }
@@ -1865,10 +1885,13 @@ function useBomb(){
     }
   });
   enemies=[];
-  // Clear enemy bullets
   bullets=bullets.filter(b=>!b.isEnemy);
-  // Screen flash
-  state.dodgeFlash=20;
+  // 폭탄 스탬프 애니메이션 시작
+  bombAnim={
+    timer:0, maxTimer:110,
+    rotations:[(Math.random()-0.5)*0.5,(Math.random()-0.5)*0.4,(Math.random()-0.5)*0.5],
+    offsets:[{x:-50,y:-25},{x:20,y:10},{x:-15,y:35}]
+  };
 }
 
 // ===== HUD =====
@@ -2348,6 +2371,178 @@ function drawGameOverScreen(){
   ctx.textAlign='left';
 }
 
+// ===== WAVE TRANSITION (1942 스타일) =====
+function startWaveTransition(nextWave){
+  enemies=[]; bullets=bullets.filter(b=>!b.isEnemy); bombItems=[];
+  waveTransition={timer:0, nextWave};
+  state.current='waveTransition';
+  player.invincible=400; player.shootCd=400;
+}
+
+function updateDrawWaveTransition(){
+  const wt=waveTransition;
+  wt.timer++;
+  const T=wt.timer;
+  const PHASE1=65, PHASE2=130;
+
+  if(T<=PHASE1){
+    // 1단계: 레인져 위로 탈출 + 빠른 스크롤
+    bgY+=6;
+    updateObstaclePositions();
+    drawBackground(state.wave);
+    // 속도선 효과
+    ctx.save(); ctx.strokeStyle='rgba(180,220,255,0.18)'; ctx.lineWidth=1.5;
+    for(let i=0;i<18;i++){
+      const lx=Math.random()*CW;
+      ctx.beginPath(); ctx.moveTo(lx,0); ctx.lineTo(lx+(Math.random()-0.5)*8,CH); ctx.stroke();
+    }
+    ctx.restore();
+    // 레인져 위로 날아감
+    const exitSpeed=4+T*0.14;
+    player.y-=exitSpeed;
+    if(player.y>-player.h) player.draw();
+    // 화면 어두워짐
+    const fadeA=Math.min(1,T/PHASE1*0.85);
+    ctx.fillStyle=`rgba(0,0,20,${fadeA})`; ctx.fillRect(0,0,CW,CH);
+    // 웨이브 전환 텍스트
+    if(T>40){
+      const ta=(T-40)/25;
+      ctx.save(); ctx.globalAlpha=Math.min(1,ta);
+      ctx.shadowBlur=20; ctx.shadowColor='#44BBFF';
+      ctx.fillStyle='#88DDFF'; ctx.font="bold 28px 'Malgun Gothic',sans-serif"; ctx.textAlign='center';
+      ctx.fillText(`웨이브 ${wt.nextWave}`,CW/2,CH/2-10);
+      ctx.fillStyle='rgba(255,255,255,0.4)'; ctx.font="14px 'Malgun Gothic',sans-serif";
+      ctx.fillText('다음 스테이지로 이동 중...',CW/2,CH/2+20);
+      ctx.restore();
+    }
+  } else if(T===PHASE1+1){
+    // 배경 전환
+    state.wave=wt.nextWave;
+    genBgObjs(state.wave);
+    player.x=CW/2; player.y=CH+80;
+  } else if(T<=PHASE2){
+    // 2단계: 새 배경에서 레인져 아래서 등장
+    bgY+=3; updateObstaclePositions();
+    drawBackground(state.wave);
+    const progress=(T-PHASE1)/( PHASE2-PHASE1);
+    const ease=1-Math.pow(1-progress,2); // ease-out
+    player.y=CH+80-(CH+80-530)*ease;
+    player.draw();
+    // 웨이브 배너
+    const ba=Math.min(1,(T-PHASE1)/20);
+    ctx.save(); ctx.globalAlpha=ba;
+    ctx.shadowBlur=22; ctx.shadowColor='#44BBFF';
+    ctx.fillStyle='#55CCFF'; ctx.font="bold 36px 'Malgun Gothic',sans-serif"; ctx.textAlign='center';
+    ctx.fillText(`웨이브 ${wt.nextWave}`,CW/2,CH/2);
+    ctx.restore();
+  } else {
+    // 전환 완료
+    player.y=530; player.invincible=120; player.shootCd=0;
+    waveTransition=null;
+    state.current='playing';
+    state.waveBannerTimer=90;
+  }
+  drawHUD();
+}
+
+// ===== BOMB STAMP ANIMATION =====
+function drawBombAnimation(){
+  if(!bombAnim) return;
+  const ba=bombAnim;
+  const t=ba.timer;
+  const mt=ba.maxTimer;
+
+  // 오버레이 알파
+  const oa=t<12?t/12:t>mt-20?(mt-t)/20:1;
+
+  // 어두운 배경
+  ctx.save(); ctx.globalAlpha=oa*0.82;
+  ctx.fillStyle='rgba(0,0,10,0.95)'; ctx.fillRect(0,0,CW,CH);
+  ctx.restore();
+
+  // 문서 용지 (t>5부터 등장)
+  if(t>5){
+    const ds=t<16?0.4+(t-5)/11*0.6:1;
+    const dw=210,dh=270,fold=22,cx2=CW/2,cy2=CH/2-10;
+    ctx.save(); ctx.globalAlpha=oa; ctx.translate(cx2,cy2); ctx.scale(ds,ds);
+    // 종이 그림자
+    ctx.shadowBlur=30; ctx.shadowColor='rgba(0,100,200,0.4)';
+    ctx.fillStyle='#F0EEE5';
+    ctx.beginPath();
+    ctx.moveTo(-dw/2,-dh/2); ctx.lineTo(dw/2-fold,-dh/2);
+    ctx.lineTo(dw/2,-dh/2+fold); ctx.lineTo(dw/2,dh/2);
+    ctx.lineTo(-dw/2,dh/2); ctx.closePath(); ctx.fill();
+    ctx.fillStyle='#DDD';
+    ctx.beginPath(); ctx.moveTo(dw/2-fold,-dh/2); ctx.lineTo(dw/2,-dh/2+fold);
+    ctx.lineTo(dw/2-fold,-dh/2+fold); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle='#CCC'; ctx.lineWidth=1; ctx.stroke();
+    // 줄 무늬
+    ctx.strokeStyle='rgba(100,100,150,0.2)'; ctx.lineWidth=0.8;
+    for(let l=0;l<9;l++){ctx.beginPath();ctx.moveTo(-dw/2+18,-dh/2+62+l*20);ctx.lineTo(dw/2-18,-dh/2+62+l*20);ctx.stroke();}
+    // 제목
+    ctx.shadowBlur=0; ctx.fillStyle='#1a1a4a';
+    ctx.font="bold 16px 'Malgun Gothic',sans-serif"; ctx.textAlign='center';
+    ctx.fillText('적    정',0,-dh/2+28);
+    ctx.fillText('검토의견서',0,-dh/2+50);
+    ctx.strokeStyle='rgba(0,0,100,0.3)'; ctx.lineWidth=1;
+    ctx.strokeRect(-dw/2+12,-dh/2+14,dw-24,44);
+    ctx.restore();
+  }
+
+  // 쾅! 도장 (t=22, 45, 68에 순서대로)
+  const stampTimes=[22,45,68];
+  stampTimes.forEach((st,i)=>{
+    if(t<st) return;
+    const age=t-st;
+    const sa=age<6?age/6:age>25?Math.max(0,1-(age-25)/8):1;
+    const scale=age<4?1.8-age*0.2:1;
+    const ox=ba.offsets[i].x, oy=ba.offsets[i].y;
+    const rot=ba.rotations[i];
+
+    // 충격파 (등장 직후)
+    if(age<8){
+      ctx.save(); ctx.globalAlpha=oa*(1-age/8)*0.6;
+      ctx.strokeStyle='#CC0000'; ctx.lineWidth=3;
+      ctx.beginPath(); ctx.arc(CW/2+ox,CH/2-10+oy,30+age*5,0,Math.PI*2); ctx.stroke();
+      ctx.restore();
+    }
+    // 화면 붉은 플래시 (1-2프레임)
+    if(age<=1){
+      ctx.save(); ctx.globalAlpha=oa*0.35; ctx.fillStyle='#FF2200'; ctx.fillRect(0,0,CW,CH); ctx.restore();
+    }
+    // 도장 원 + 텍스트
+    ctx.save(); ctx.globalAlpha=oa*sa;
+    ctx.translate(CW/2+ox, CH/2-10+oy);
+    ctx.scale(scale,scale); ctx.rotate(rot);
+    // 외곽 원
+    ctx.shadowBlur=16; ctx.shadowColor='rgba(200,0,0,0.8)';
+    ctx.strokeStyle='#CC0000'; ctx.lineWidth=4;
+    ctx.beginPath(); ctx.arc(0,0,32,0,Math.PI*2); ctx.stroke();
+    ctx.strokeStyle='rgba(180,0,0,0.5)'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.arc(0,0,27,0,Math.PI*2); ctx.stroke();
+    // 텍스트
+    ctx.fillStyle='#CC0000'; ctx.shadowBlur=8;
+    ctx.font="bold 26px 'Malgun Gothic',sans-serif"; ctx.textAlign='center';
+    ctx.fillText('쾅!',0,10);
+    ctx.restore();
+  });
+
+  // 전체 쾅 텍스트 (세 번 다 찍힌 후)
+  if(t>75&&t<mt-15){
+    const ta=Math.min(1,(t-75)/10);
+    ctx.save(); ctx.globalAlpha=oa*ta;
+    ctx.shadowBlur=25; ctx.shadowColor='#FF0000';
+    ctx.fillStyle='#FF2200'; ctx.font="bold 44px 'Malgun Gothic',sans-serif"; ctx.textAlign='center';
+    ctx.fillText('쾅쾅쾅!!!',CW/2,CH-60);
+    ctx.fillStyle='#FF6600'; ctx.font="14px 'Malgun Gothic',sans-serif";
+    ctx.fillText('적정 검토의견서 발동!',CW/2,CH-30);
+    ctx.restore();
+  }
+
+  ba.timer++;
+  if(ba.timer>mt) bombAnim=null;
+}
+
 function startGame(){ initGame(); state.current='playing'; mouse.clicked=false; }
 
 // ===== MAIN UPDATE =====
@@ -2400,9 +2595,8 @@ function updateGame(){
     if(state.wave===5&&!save.allStagesCleared){
       save.allStagesCleared=true;saveSave();
     }
-    state.wave++;
-    state.waveBannerTimer=90;
-    genBgObjs(state.wave);
+    // 1942 스타일 웨이브 전환 애니메이션 시작
+    startWaveTransition(state.wave+1);
   }
 }
 
@@ -2427,12 +2621,18 @@ function gameLoop(){
       explosions.forEach(e=>e.draw());
       drawHUD();
       drawWaveBanner();
+      drawBombAnimation();
+      break;
+    case 'waveTransition':
+      updateDrawWaveTransition();
+      drawBombAnimation();
       break;
     case 'gameOver':
       drawBackground(state.wave);
       explosions.forEach(e=>{e.update();e.draw();});
       explosions=explosions.filter(e=>e.active);
       drawHUD();
+      drawBombAnimation();
       drawGameOverScreen();
       break;
     case 'statAlloc':
