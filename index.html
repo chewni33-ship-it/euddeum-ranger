@@ -98,16 +98,54 @@ canvas.width = 480; canvas.height = 640;
 const CW=480, CH=640;
 
 // ===== CHARACTERS =====
-const STARTER_CHARS  = ['김도영','김선일','김지은','박미진','이남경','이성용','장혜진','조현희','한지연'];
-const UNLOCK_CHARS   = ['김영호','소재혁','송광석','이민호','이승민','임성빈','차재인','허재'];
-const SECRET_CHAR    = '이선빈';
+const SECRET_CHAR = '이선빈';
 
-function charTier(n){ return n===SECRET_CHAR?'secret':UNLOCK_CHARS.includes(n)?'unlocked':'starter'; }
-const BASE_STATS = {
-  starter:  {maxHp:60,  dmg:1, luck:1},
-  unlocked: {maxHp:80,  dmg:2, luck:2},
-  secret:   {maxHp:110, dmg:3, luck:4}
+const TEAMS = {
+  construction:{name:'공사안전팀',color:'#FF7700',icon:'🏗',
+    members:['임성빈','송광석','김지은','김선일'],
+    stats:{maxHp:75,dmg:2,luck:1},missile:'heavy',shootRate:14,
+    missileNames:['중폭탄','강화중폭탄','폭발탄'],locked:false},
+  design:{name:'설계안전팀',color:'#4488FF',icon:'📐',
+    members:['소재혁','이승민','한지연'],
+    stats:{maxHp:60,dmg:1,luck:3},missile:'homing',shootRate:12,
+    missileNames:['유도미사일','고속유도','쌍발유도'],locked:true},
+  structural:{name:'구조안전팀',color:'#44CC44',icon:'🏛',
+    members:['허재','장혜진','이남경','박미진'],
+    stats:{maxHp:100,dmg:1,luck:1},missile:'spread',shootRate:14,
+    missileNames:['3방향탄','5방향탄','7방향탄'],locked:false},
+  management:{name:'경영지원팀',color:'#FF44FF',icon:'💼',
+    members:['이선빈','차재인'],
+    stats:{maxHp:70,dmg:2,luck:2},missile:'laser',shootRate:7,
+    missileNames:['레이저','레이저 2발','레이저 3발'],locked:false},
+  marketing:{name:'마케팅팀',color:'#FFCC00',icon:'📊',
+    members:['이민호','조현희','김도영'],
+    stats:{maxHp:70,dmg:2,luck:2},missile:'twin',shootRate:11,
+    missileNames:['쌍발탄','3발탄','4발탄'],locked:false},
+  facility:{name:'시설안전팀',color:'#00CCCC',icon:'🔧',
+    members:['김영호','이성용'],
+    stats:{maxHp:70,dmg:1,luck:4},missile:'critical',shootRate:13,
+    missileNames:['크리탄','관통탄','관통크리탄'],locked:true}
 };
+function getTeam(n){
+  for(const t of Object.values(TEAMS)) if(t.members.includes(n)) return t;
+  return TEAMS.construction;
+}
+function charTier(n){ return n===SECRET_CHAR?'secret':getTeam(n).locked?'unlocked':'starter'; }
+// Derived availability arrays for backward compat
+const ALL_CHARS=Object.values(TEAMS).flatMap(t=>t.members);
+const STARTER_CHARS=ALL_CHARS.filter(n=>n!==SECRET_CHAR&&!getTeam(n).locked);
+const UNLOCK_CHARS =ALL_CHARS.filter(n=>n!==SECRET_CHAR&&getTeam(n).locked);
+function getCharByIndex(idx){
+  let i=0;
+  for(const t of Object.values(TEAMS)){
+    for(const name of t.members){ if(i===idx) return name; i++; }
+  }
+  return null;
+}
+function hexToRgba(hex,a){
+  const r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16);
+  return `rgba(${r},${g},${b},${a})`;
+}
 
 // ===== ACCOUNT & SAVE SYSTEM =====
 let currentUser = null;
@@ -213,15 +251,22 @@ function getCD(n){
   return save.charData[n];
 }
 function xpNeeded(lvl){ return lvl*100; }
+function getMissileEvo(n){ const l=getCD(n).level; return l>=5?3:l>=3?2:1; }
 function getStats(n){
-  const b=BASE_STATS[charTier(n)], cd=getCD(n);
-  return { maxHp:b.maxHp+cd.sHp*30, dmg:b.dmg+cd.sStr,
-    crit:0.05+cd.sLuck*0.03, dodge:0.10+cd.sLuck*0.02, level:cd.level };
+  const t=getTeam(n), cd=getCD(n);
+  return { maxHp:t.stats.maxHp+cd.sHp*30, dmg:t.stats.dmg+cd.sStr,
+    crit:0.05+t.stats.luck*0.01+cd.sLuck*0.03,
+    dodge:0.10+t.stats.luck*0.01+cd.sLuck*0.02, level:cd.level };
 }
 function getAvailableChars(){
-  const c=[...STARTER_CHARS];
-  if(save.allStagesCleared) c.push(...UNLOCK_CHARS);
-  if(save.secretUnlocked) c.push(SECRET_CHAR);
+  const c=[];
+  for(const t of Object.values(TEAMS)){
+    if(t.locked&&!save.allStagesCleared) continue;
+    for(const name of t.members){
+      if(name===SECRET_CHAR&&!save.secretUnlocked) continue;
+      c.push(name);
+    }
+  }
   return c;
 }
 
@@ -676,18 +721,21 @@ function genBgObjs(wave){
   for(let i=0;i<14;i++){
     const t=types[Math.floor(Math.random()*types.length)];
     const p=OBS_PROPS[t]||{hp:0,w:10,h:10,pts:0};
+    // Stagger initial positions evenly across screen height
+    const screenY = -50 + (i/14)*(CH+200);
     bgScrollItems.push({
-      type:t, x:Math.random()*CW, y:Math.random()*CH,
-      spd:0.6+Math.random()*1.2, phase:Math.random()*Math.PI*2,
+      type:t, x:20+Math.random()*(CW-40),
+      spd:0.8+Math.random()*1.4, phase:Math.random()*Math.PI*2,
       hp:p.hp, maxHp:p.hp, w:p.w, h:p.h, pts:p.pts,
-      hitFlash:0, screenY:0
+      hitFlash:0, screenY
     });
   }
 }
-// Compute current screen Y for all obstacles (call each update frame)
+// Update obstacle screenY directly each frame (stable, no bgY formula)
 function updateObstaclePositions(){
   bgScrollItems.forEach(o=>{
-    o.screenY=((o.y+bgY*o.spd)%(CH+80)+CH+80)%(CH+80)-40;
+    o.screenY += o.spd;
+    if(o.screenY > CH+50) o.screenY = -40 - Math.random()*150;
     if(o.hitFlash>0) o.hitFlash--;
   });
 }
@@ -783,7 +831,6 @@ function drawBackground(wave){
       ctx.restore();
     }
   });
-  bgY+=1.0;
   // Stage label
   ctx.fillStyle='rgba(255,255,255,0.15)';
   ctx.font="11px 'Malgun Gothic',sans-serif"; ctx.textAlign='right';
@@ -792,35 +839,97 @@ function drawBackground(wave){
 
 // ===== BULLET / MISSILE =====
 class Bullet {
-  constructor(x,y,isEnemy,angle=null){
-    this.x=x; this.y=y; this.isEnemy=isEnemy; this.active=true; this.dmg=1;
+  constructor(x,y,isEnemy,opts={}){
+    this.x=x; this.y=y; this.isEnemy=isEnemy; this.active=true;
+    this.type=opts.type||'normal';
+    this.dmg=opts.dmg||1;
+    this.piercing=opts.piercing||0;
+    this.hitTargets=new Set();
+    this.target=null;
     if(isEnemy){
-      this.vx=angle!==null?Math.cos(angle)*4.5:0;
-      this.vy=angle!==null?Math.sin(angle)*4.5:5;
+      const angle=opts.angle!=null?opts.angle:null;
+      this.vx=angle!=null?Math.cos(angle)*4.5:0;
+      this.vy=angle!=null?Math.sin(angle)*4.5:5;
       this.w=5; this.h=10;
     } else {
-      this.vx=0; this.vy=-12; this.w=8; this.h=18;
+      const angle=opts.angle!=null?opts.angle:null;
+      if(angle!=null){ this.vx=Math.sin(angle)*10; this.vy=-Math.cos(angle)*10; }
+      else { this.vx=opts.vx||0; this.vy=opts.vy||-12; }
+      switch(this.type){
+        case 'heavy':  this.w=14; this.h=22; break;
+        case 'laser':  this.w=4;  this.h=38; break;
+        case 'homing': this.w=7;  this.h=14; break;
+        default:       this.w=8;  this.h=18;
+      }
     }
   }
-  update(){ this.x+=this.vx; this.y+=this.vy; if(this.y<-40||this.y>CH+40||this.x<-30||this.x>CW+30) this.active=false; }
+  update(enms){
+    if(!this.isEnemy&&this.type==='homing'&&enms){
+      if(!this.target||!this.target.active){
+        let best=null,bestD=Infinity;
+        for(const e of enms){ if(!e.active) continue; const d=Math.hypot(e.x-this.x,e.y-this.y); if(d<bestD){bestD=d;best=e;} }
+        this.target=best;
+      }
+      if(this.target&&this.target.active){
+        const tx=this.target.x-this.x,ty=this.target.y-this.y,len=Math.hypot(tx,ty)||1,spd=13;
+        this.vx+=(tx/len*spd-this.vx)*0.14; this.vy+=(ty/len*spd-this.vy)*0.14;
+      }
+    }
+    this.x+=this.vx; this.y+=this.vy;
+    if(this.y<-60||this.y>CH+60||this.x<-50||this.x>CW+50) this.active=false;
+  }
   draw(){
     ctx.save();
     if(!this.isEnemy){
-      ctx.shadowBlur=10; ctx.shadowColor='#FFD700';
-      ctx.translate(this.x,this.y);
-      // Missile body
-      ctx.fillStyle='#FFD700';
-      ctx.beginPath(); ctx.moveTo(0,-10); ctx.lineTo(4,-2); ctx.lineTo(4,7); ctx.lineTo(-4,7); ctx.lineTo(-4,-2); ctx.closePath(); ctx.fill();
-      // Nose
-      ctx.fillStyle='#FF6600';
-      ctx.beginPath(); ctx.moveTo(0,-10); ctx.lineTo(4,-2); ctx.lineTo(-4,-2); ctx.closePath(); ctx.fill();
-      // Fins
-      ctx.fillStyle='#FF4400';
-      ctx.beginPath(); ctx.moveTo(-4,3); ctx.lineTo(-8,8); ctx.lineTo(-4,8); ctx.closePath(); ctx.fill();
-      ctx.beginPath(); ctx.moveTo(4,3); ctx.lineTo(8,8); ctx.lineTo(4,8); ctx.closePath(); ctx.fill();
-      // Flame
-      ctx.fillStyle=`rgba(255,${80+Math.random()*60},0,0.85)`;
-      ctx.beginPath(); ctx.moveTo(-3,7); ctx.lineTo(0,14+Math.random()*4); ctx.lineTo(3,7); ctx.closePath(); ctx.fill();
+      const rotAngle=Math.atan2(this.vx,-this.vy);
+      switch(this.type){
+        case 'heavy':
+          ctx.shadowBlur=16; ctx.shadowColor='#FF6600';
+          ctx.translate(this.x,this.y);
+          ctx.fillStyle='#FF8800'; ctx.beginPath();ctx.moveTo(0,-13);ctx.lineTo(8,-2);ctx.lineTo(8,10);ctx.lineTo(-8,10);ctx.lineTo(-8,-2);ctx.closePath();ctx.fill();
+          ctx.fillStyle='#FF3300'; ctx.beginPath();ctx.moveTo(0,-13);ctx.lineTo(8,-2);ctx.lineTo(-8,-2);ctx.closePath();ctx.fill();
+          ctx.fillStyle='#FF5500'; ctx.beginPath();ctx.moveTo(-8,4);ctx.lineTo(-13,11);ctx.lineTo(-8,11);ctx.closePath();ctx.fill();
+          ctx.beginPath();ctx.moveTo(8,4);ctx.lineTo(13,11);ctx.lineTo(8,11);ctx.closePath();ctx.fill();
+          ctx.fillStyle=`rgba(255,${60+Math.random()*80},0,0.9)`;
+          ctx.beginPath();ctx.moveTo(-6,10);ctx.lineTo(0,20+Math.random()*6);ctx.lineTo(6,10);ctx.closePath();ctx.fill();
+          break;
+        case 'laser':
+          ctx.shadowBlur=20; ctx.shadowColor='#00FFFF';
+          ctx.fillStyle='rgba(0,200,255,0.3)'; ctx.fillRect(this.x-6,this.y-this.h/2,12,this.h);
+          ctx.fillStyle='#00FFFF'; ctx.fillRect(this.x-2,this.y-this.h/2,4,this.h);
+          ctx.fillStyle='rgba(255,255,255,0.9)'; ctx.fillRect(this.x-1,this.y-this.h/2,2,this.h);
+          break;
+        case 'homing':
+          ctx.shadowBlur=12; ctx.shadowColor='#FF44FF';
+          ctx.translate(this.x,this.y); ctx.rotate(rotAngle);
+          ctx.fillStyle='#FF44FF'; ctx.beginPath();ctx.moveTo(0,-10);ctx.lineTo(5,-2);ctx.lineTo(5,7);ctx.lineTo(-5,7);ctx.lineTo(-5,-2);ctx.closePath();ctx.fill();
+          ctx.fillStyle='#FF00FF'; ctx.beginPath();ctx.moveTo(0,-10);ctx.lineTo(5,-2);ctx.lineTo(-5,-2);ctx.closePath();ctx.fill();
+          ctx.fillStyle='#FF44AA'; ctx.beginPath();ctx.moveTo(-5,3);ctx.lineTo(-9,8);ctx.lineTo(-5,8);ctx.closePath();ctx.fill();
+          ctx.beginPath();ctx.moveTo(5,3);ctx.lineTo(9,8);ctx.lineTo(5,8);ctx.closePath();ctx.fill();
+          ctx.fillStyle=`rgba(255,0,255,0.8)`; ctx.beginPath();ctx.moveTo(-3,7);ctx.lineTo(0,13+Math.random()*4);ctx.lineTo(3,7);ctx.closePath();ctx.fill();
+          break;
+        case 'laser_beam': // unused, kept as alias
+          break;
+        case 'critical':
+          ctx.shadowBlur=12; ctx.shadowColor='#00DDDD';
+          ctx.translate(this.x,this.y); ctx.rotate(rotAngle);
+          ctx.fillStyle='#00CCCC'; ctx.beginPath();ctx.moveTo(0,-10);ctx.lineTo(4,-2);ctx.lineTo(4,7);ctx.lineTo(-4,7);ctx.lineTo(-4,-2);ctx.closePath();ctx.fill();
+          ctx.fillStyle='#00FFFF'; ctx.beginPath();ctx.moveTo(0,-10);ctx.lineTo(4,-2);ctx.lineTo(-4,-2);ctx.closePath();ctx.fill();
+          ctx.fillStyle='#FF6600'; ctx.beginPath();ctx.moveTo(-4,3);ctx.lineTo(-8,8);ctx.lineTo(-4,8);ctx.closePath();ctx.fill();
+          ctx.beginPath();ctx.moveTo(4,3);ctx.lineTo(8,8);ctx.lineTo(4,8);ctx.closePath();ctx.fill();
+          ctx.fillStyle=`rgba(0,${200+Math.random()*55},255,0.85)`;
+          ctx.beginPath();ctx.moveTo(-3,7);ctx.lineTo(0,14+Math.random()*4);ctx.lineTo(3,7);ctx.closePath();ctx.fill();
+          break;
+        default: // normal, spread, twin
+          ctx.shadowBlur=10; ctx.shadowColor='#FFD700';
+          ctx.translate(this.x,this.y); ctx.rotate(rotAngle);
+          ctx.fillStyle='#FFD700'; ctx.beginPath();ctx.moveTo(0,-10);ctx.lineTo(4,-2);ctx.lineTo(4,7);ctx.lineTo(-4,7);ctx.lineTo(-4,-2);ctx.closePath();ctx.fill();
+          ctx.fillStyle='#FF6600'; ctx.beginPath();ctx.moveTo(0,-10);ctx.lineTo(4,-2);ctx.lineTo(-4,-2);ctx.closePath();ctx.fill();
+          ctx.fillStyle='#FF4400'; ctx.beginPath();ctx.moveTo(-4,3);ctx.lineTo(-8,8);ctx.lineTo(-4,8);ctx.closePath();ctx.fill();
+          ctx.beginPath();ctx.moveTo(4,3);ctx.lineTo(8,8);ctx.lineTo(4,8);ctx.closePath();ctx.fill();
+          ctx.fillStyle=`rgba(255,${80+Math.random()*60},0,0.85)`;
+          ctx.beginPath();ctx.moveTo(-3,7);ctx.lineTo(0,14+Math.random()*4);ctx.lineTo(3,7);ctx.closePath();ctx.fill();
+      }
     } else {
       ctx.shadowBlur=5; ctx.shadowColor='#FF3333';
       ctx.fillStyle='#FF4444'; ctx.fillRect(this.x-this.w/2,this.y-this.h/2,this.w,this.h);
@@ -828,6 +937,61 @@ class Bullet {
     ctx.restore();
   }
   getBounds(){ return {x:this.x-this.w/2,y:this.y-this.h/2,w:this.w,h:this.h}; }
+}
+
+// Missile factory - returns array of bullets based on team missile type and evo level
+function makeBullets(px,py,dmg,name){
+  const team=getTeam(name);
+  const type=team.missile;
+  const evo=getMissileEvo(name);
+  const bs=[];
+  switch(type){
+    case 'heavy': {
+      const b=new Bullet(px,py,false,{type:'heavy',dmg:Math.round(dmg*(evo===3?2:evo===2?1.5:1)),vy:-(7+evo)});
+      bs.push(b); break;
+    }
+    case 'homing': {
+      const count=evo===3?2:1;
+      const speed=10+evo*2;
+      for(let i=0;i<count;i++){
+        const ox=(count===2?(i===0?-8:8):0);
+        bs.push(new Bullet(px+ox,py,false,{type:'homing',dmg,vy:-speed}));
+      }
+      break;
+    }
+    case 'spread': {
+      const count=evo===1?3:evo===2?5:7;
+      const spread=Math.PI/4;
+      for(let i=0;i<count;i++){
+        const angle=count===1?0:(i/(count-1)-0.5)*spread;
+        bs.push(new Bullet(px,py,false,{type:'spread',dmg,angle}));
+      }
+      break;
+    }
+    case 'laser': {
+      for(let i=0;i<evo;i++){
+        const ox=(evo===1?0:evo===2?(i===0?-10:10):(i-1)*14);
+        bs.push(new Bullet(px+ox,py,false,{type:'laser',dmg,piercing:2,vy:-18}));
+      }
+      break;
+    }
+    case 'twin': {
+      const count=evo+1;
+      for(let i=0;i<count;i++){
+        const ox=(i-(count-1)/2)*13;
+        bs.push(new Bullet(px+ox,py,false,{type:'twin',dmg,vy:-12}));
+      }
+      break;
+    }
+    case 'critical': {
+      const b=new Bullet(px,py,false,{type:'critical',dmg,vy:-12,piercing:evo===3?1:0});
+      bs.push(b); break;
+    }
+    default: {
+      bs.push(new Bullet(px,py,false,{dmg,vy:-12})); break;
+    }
+  }
+  return bs;
 }
 
 // ===== BOMB ITEM (적정 검토의견서) =====
@@ -871,7 +1035,8 @@ class Player {
     this.name=name; this.x=CW/2; this.y=530;
     this.w=64; this.h=82;
     this.speed=4.5;
-    this.shootCd=0; this.shootRate=11;
+    const team=getTeam(name);
+    this.shootCd=0; this.shootRate=team.shootRate||11;
     this.invincible=0; this.bombs=0;
     const st=getStats(name);
     this.maxHp=st.maxHp; this.hp=st.maxHp;
@@ -893,8 +1058,7 @@ class Player {
   tryShoot(){
     if((keys['Space']||keys['KeyZ'])&&this.shootCd===0){
       this.shootCd=this.shootRate;
-      const b=new Bullet(this.x,this.y-this.h/2,false);
-      b.dmg=this.dmg; return b;
+      return makeBullets(this.x,this.y-this.h/2,this.dmg,this.name);
     }
     return null;
   }
@@ -1539,7 +1703,7 @@ let bombSpawnTimer=300;
 let prevBombKey=false, prevStatKey=false;
 
 function initGame(){
-  const charName=getAvailableChars()[state.selectedChar];
+  const charName=getCharByIndex(state.selectedChar)||getAvailableChars()[0];
   player=new Player(charName);
   bullets=[];enemies=[];explosions=[];bombItems=[];
   waveManager=new WaveManager();
@@ -1559,8 +1723,11 @@ function checkCollisions(){
     if(b.isEnemy||!b.active) continue;
     for(const e of enemies){
       if(!e.active) continue;
+      if(b.hitTargets&&b.hitTargets.has(e)) continue;
       if(rects(b.getBounds(),e.getBounds())){
-        b.active=false;
+        if(b.hitTargets) b.hitTargets.add(e);
+        if(b.piercing>0) b.piercing--;
+        else b.active=false;
         let dmg=b.dmg;
         if(Math.random()<player.crit){dmg*=2;player.critMsg=40;}
         e.hp-=dmg;
@@ -1570,7 +1737,6 @@ function checkCollisions(){
           state.score+=e.points*Math.max(1,Math.floor(state.wave/2));
           gainXp(e.points/5);
         }
-        break;
       }
     }
   }
@@ -1774,143 +1940,176 @@ function drawLoadingScreen(){
 // ===== CHAR SELECT SCREEN =====
 function drawCharSelectScreen(){
   drawBackground(1);
-  ctx.fillStyle='rgba(0,0,20,0.7)';ctx.fillRect(0,0,CW,CH);
+  ctx.fillStyle='rgba(0,0,20,0.75)';ctx.fillRect(0,0,CW,CH);
+
   // Title
   ctx.save();ctx.shadowBlur=22;ctx.shadowColor='#3399FF';
-  ctx.fillStyle='#FFD700';ctx.font="bold 22px 'Malgun Gothic',sans-serif";ctx.textAlign='center';
-  ctx.fillText('으뜸안전기술 레인져',CW/2,44);ctx.restore();
-  ctx.fillStyle='#AACCEE';ctx.font="12px 'Malgun Gothic',sans-serif";ctx.textAlign='center';
-  ctx.fillText('레인져를 선택하세요',CW/2,64);
+  ctx.fillStyle='#FFD700';ctx.font="bold 20px 'Malgun Gothic',sans-serif";ctx.textAlign='center';
+  ctx.fillText('으뜸안전기술 레인져',CW/2,28);ctx.restore();
+  ctx.fillStyle='#AACCEE';ctx.font="10px 'Malgun Gothic',sans-serif";ctx.textAlign='center';
+  ctx.fillText('팀과 레인져를 선택하세요',CW/2,44);
 
-  const avail=getAvailableChars();
-  const cols=6, cellW=72, cellH=108;
-  const padX=(CW-cols*cellW)/2;
-  const padY=76;
-  const imgH=88;
+  const teamKeys=Object.keys(TEAMS);
+  const teamH=88; // header(20) + portrait(58) + name(10)
+  const startY=50;
+  const cellW=54, cellH=58;
 
   state.hoveredChar=-1;
-  avail.forEach((name,i)=>{
-    const col=i%cols, row=Math.floor(i/cols);
-    const cx=padX+col*cellW+2, cy=padY+row*cellH+2;
-    const cw=cellW-4, ch=imgH;
-    const hov=mouse.x>=cx&&mouse.x<=cx+cw&&mouse.y>=cy&&mouse.y<=cy+ch;
-    if(hov) state.hoveredChar=i;
-    const sel=state.selectedChar===i;
-    ctx.save();
-    if(sel){ctx.shadowBlur=12;ctx.shadowColor='#FFD700';ctx.strokeStyle='#FFD700';ctx.lineWidth=2.5;ctx.strokeRect(cx,cy,cw,ch);}
-    else if(hov){ctx.strokeStyle='#88CCFF';ctx.lineWidth=1.5;ctx.strokeRect(cx,cy,cw,ch);}
-    // Tier color bg
-    const tier=charTier(name);
-    ctx.fillStyle=tier==='secret'?'rgba(80,0,120,0.5)':tier==='unlocked'?'rgba(0,40,80,0.5)':'rgba(10,20,40,0.5)';
-    ctx.fillRect(cx,cy,cw,ch);
-    const img=images[name];
-    if(img&&img.complete&&img.naturalWidth>0){
-      const sc=Math.min(cw/img.naturalWidth,ch/img.naturalHeight);
-      const dw=img.naturalWidth*sc,dh=img.naturalHeight*sc;
-      ctx.drawImage(img,cx+(cw-dw)/2,cy+(ch-dh)/2,dw,dh);
+  let charIdx=0;
+
+  teamKeys.forEach((tkey,ti)=>{
+    const team=TEAMS[tkey];
+    const ty=startY+ti*teamH;
+    const headerH=20;
+    const teamLocked=team.locked&&!save.allStagesCleared;
+
+    // Team header bar
+    const tg=ctx.createLinearGradient(0,ty,CW,ty);
+    tg.addColorStop(0,hexToRgba(team.color,teamLocked?0.15:0.4));
+    tg.addColorStop(1,hexToRgba(team.color,teamLocked?0.05:0.15));
+    ctx.fillStyle=tg; ctx.fillRect(0,ty,CW,headerH);
+    ctx.strokeStyle=hexToRgba(team.color,teamLocked?0.2:0.5);
+    ctx.lineWidth=1; ctx.strokeRect(0,ty,CW,headerH);
+
+    // Team name + icon
+    ctx.fillStyle=teamLocked?'rgba(255,255,255,0.25)':team.color;
+    ctx.font="bold 11px 'Malgun Gothic',sans-serif";ctx.textAlign='left';
+    ctx.fillText(`${team.icon} ${team.name}`,8,ty+13);
+
+    // Stats + missile info
+    const evo=state.selectedChar>=0&&getCharByIndex(state.selectedChar)&&getTeam(getCharByIndex(state.selectedChar))===team
+      ?getMissileEvo(getCharByIndex(state.selectedChar)):1;
+    ctx.fillStyle=teamLocked?'rgba(255,255,255,0.15)':'rgba(255,255,255,0.65)';
+    ctx.font="9px 'Malgun Gothic',sans-serif";ctx.textAlign='right';
+    ctx.fillText(`HP:${team.stats.maxHp} 공:${team.stats.dmg} 운:${team.stats.luck}  🚀${team.missileNames[0]}→${team.missileNames[2]}`,CW-6,ty+13);
+
+    if(teamLocked){
+      ctx.fillStyle='rgba(0,0,0,0.5)';ctx.fillRect(0,ty+headerH,CW,teamH-headerH);
+      ctx.fillStyle='rgba(255,255,255,0.25)';ctx.font="10px 'Malgun Gothic',sans-serif";ctx.textAlign='center';
+      ctx.fillText('🔒 5스테이지 클리어 후 해금',CW/2,ty+headerH+32);
+      charIdx+=team.members.length;
+    } else {
+      const members=team.members;
+      const totalW=members.length*(cellW+4)-4;
+      const px=(CW-totalW)/2;
+      members.forEach((name,mi)=>{
+        const cx=px+mi*(cellW+4);
+        const cy=ty+headerH+2;
+        const isSecret=name===SECRET_CHAR;
+        const memberLocked=isSecret&&!save.secretUnlocked;
+        const hov=!memberLocked&&mouse.x>=cx&&mouse.x<=cx+cellW&&mouse.y>=cy&&mouse.y<=cy+cellH;
+        if(hov) state.hoveredChar=charIdx;
+        const sel=state.selectedChar===charIdx;
+
+        if(memberLocked){
+          ctx.fillStyle='rgba(80,0,100,0.7)';ctx.fillRect(cx,cy,cellW,cellH);
+          ctx.strokeStyle='rgba(200,80,255,0.4)';ctx.lineWidth=1;ctx.strokeRect(cx,cy,cellW,cellH);
+          ctx.font="16px sans-serif";ctx.textAlign='center';ctx.fillStyle='rgba(255,100,255,0.5)';
+          ctx.fillText('🔒',cx+cellW/2,cy+cellH/2+6);
+          ctx.fillStyle='rgba(200,100,255,0.4)';ctx.font="7px 'Malgun Gothic',sans-serif";
+          ctx.fillText('비밀해금',cx+cellW/2,cy+cellH+9);
+        } else {
+          ctx.save();
+          if(sel){ctx.shadowBlur=12;ctx.shadowColor=team.color;ctx.strokeStyle=team.color;ctx.lineWidth=2.5;ctx.strokeRect(cx,cy,cellW,cellH);}
+          else if(hov){ctx.strokeStyle=hexToRgba(team.color,0.8);ctx.lineWidth=1.5;ctx.strokeRect(cx,cy,cellW,cellH);}
+          ctx.fillStyle='rgba(0,10,25,0.8)';ctx.fillRect(cx,cy,cellW,cellH);
+          const img=images[name];
+          if(img&&img.complete&&img.naturalWidth>0){
+            const sc=Math.min(cellW/img.naturalWidth,cellH/img.naturalHeight);
+            const dw=img.naturalWidth*sc,dh=img.naturalHeight*sc;
+            ctx.drawImage(img,cx+(cellW-dw)/2,cy+(cellH-dh)/2,dw,dh);
+          }
+          ctx.restore();
+          // Level badge
+          const cd=getCD(name);
+          ctx.fillStyle='rgba(0,0,0,0.7)';ctx.fillRect(cx,cy,cellW,11);
+          ctx.fillStyle=sel?team.color:'rgba(255,255,255,0.5)';
+          ctx.font="bold 8px 'Malgun Gothic',sans-serif";ctx.textAlign='left';
+          ctx.fillText(`Lv.${cd.level}`,cx+2,cy+8);
+          if(cd.pts>0){ctx.fillStyle='#FFFF44';ctx.textAlign='right';ctx.fillText('★',cx+cellW-2,cy+8);}
+          // Name
+          ctx.fillStyle=sel?team.color:hov?hexToRgba(team.color,0.9):'#AABBCC';
+          ctx.font=`${sel?'bold ':''}8px 'Malgun Gothic',sans-serif`;ctx.textAlign='center';
+          ctx.fillText(name,cx+cellW/2,cy+cellH+9);
+        }
+        charIdx++;
+      });
     }
-    ctx.restore();
-    // Name
-    ctx.fillStyle=sel?'#FFD700':hov?'#88CCFF':tier==='secret'?'#FF88FF':tier==='unlocked'?'#88DDFF':'#AABBCC';
-    ctx.font=`${sel?'bold ':''}10px 'Malgun Gothic',sans-serif`;ctx.textAlign='center';
-    ctx.fillText(name,cx+cw/2,cy+ch+13);
   });
 
-  // Locked display
-  if(!save.allStagesCleared&&UNLOCK_CHARS.length>0){
-    const rows=Math.ceil(avail.length/cols);
-    const ly=padY+rows*cellH+2;
-    for(let i=0;i<UNLOCK_CHARS.length;i++){
-      const col=i%cols,row=Math.floor(i/cols);
-      const cx=padX+col*cellW+2,cy=ly+row*cellH+2,cw=cellW-4,ch=imgH;
-      ctx.fillStyle='rgba(0,0,0,0.7)';ctx.fillRect(cx,cy,cw,ch);
-      ctx.strokeStyle='#334455';ctx.lineWidth=1;ctx.strokeRect(cx,cy,cw,ch);
-      ctx.fillStyle='#445566';ctx.font="20px sans-serif";ctx.textAlign='center';
-      ctx.fillText('🔒',cx+cw/2,cy+ch/2+8);
-      ctx.fillStyle='#334455';ctx.font="9px 'Malgun Gothic',sans-serif";
-      ctx.fillText('5스테이지 클리어',cx+cw/2,cy+ch+13);
-    }
-  }
+  // Bottom panel
+  const panelY=startY+teamKeys.length*teamH+2;
+  ctx.fillStyle='rgba(0,0,0,0.8)';ctx.fillRect(0,panelY,CW,CH-panelY);
 
-  // --- Button click handling ---
-  if(mouse.clicked){
-    if(state.hoveredChar>=0) state.selectedChar=state.hoveredChar;
-    if(state.selectedChar>=0){
-      // Start button
-      if(mouse.x>=170&&mouse.x<=320&&mouse.y>=432&&mouse.y<=468){ startGame(); mouse.clicked=false; return; }
-      // Stat alloc button
-      if(mouse.x>=326&&mouse.x<=458&&mouse.y>=432&&mouse.y<=468){
-        state.statAllocChar=getAvailableChars()[state.selectedChar];
-        statAllocPending=null;
-        state.current='statAlloc';
-        mouse.clicked=false; return;
-      }
-    }
-    mouse.clicked=false;
-  }
-
-  // --- Buttons row ---
   if(state.selectedChar>=0){
-    const name=getAvailableChars()[state.selectedChar];
-    const st=getStats(name); const cd=getCD(name);
-    const hasPts=cd.pts>0;
-
-    // Start button (left)
-    ctx.save(); ctx.shadowBlur=12; ctx.shadowColor='#FFD700';
-    ctx.fillStyle='#FFD700'; ctx.beginPath(); ctx.roundRect(170,432,146,36,7); ctx.fill(); ctx.restore();
-    ctx.fillStyle='#000'; ctx.font="bold 16px 'Malgun Gothic',sans-serif"; ctx.textAlign='center';
-    ctx.fillText('▶ 시작',243,456);
-
-    // Stat alloc button (right)
-    ctx.save();
-    if(hasPts){ ctx.shadowBlur=10; ctx.shadowColor='#FFFF44'; }
-    ctx.fillStyle=hasPts?'#FFFF22':'#334455';
-    ctx.beginPath(); ctx.roundRect(326,432,132,36,7); ctx.fill(); ctx.restore();
-    ctx.fillStyle=hasPts?'#000':'#778899';
-    ctx.font=`${hasPts?'bold ':''}13px 'Malgun Gothic',sans-serif`; ctx.textAlign='center';
-    ctx.fillText(`⚡능력치 배분${hasPts?` (${cd.pts})`:''}`,392,456);
-
-    // Char stats panel
-    ctx.fillStyle='rgba(0,0,0,0.65)'; ctx.beginPath(); ctx.roundRect(60,474,360,52,6); ctx.fill();
-    ctx.fillStyle='#AACCEE'; ctx.font="11px 'Malgun Gothic',sans-serif"; ctx.textAlign='center';
-    ctx.fillText(`Lv.${cd.level}  HP:${st.maxHp}  공격:${st.dmg}  크리:${Math.round(st.crit*100)}%  회피:${Math.round(st.dodge*100)}%`,CW/2,494);
-    ctx.fillStyle='#778899'; ctx.font="10px 'Malgun Gothic',sans-serif";
-    ctx.fillText(`경험치: ${cd.xp} / ${xpNeeded(cd.level)} XP  (다음 레벨업까지 ${xpNeeded(cd.level)-cd.xp} XP)`,CW/2,510);
-    if(hasPts){ ctx.fillStyle='#FFFF44'; ctx.font="bold 11px 'Malgun Gothic',sans-serif"; ctx.fillText(`★ 미배분 포인트 ${cd.pts}개 있음! 능력치를 올려주세요`,CW/2,524); }
+    const selName=getCharByIndex(state.selectedChar);
+    if(selName){
+      const team=getTeam(selName);
+      const st=getStats(selName);const cd=getCD(selName);
+      const evo=getMissileEvo(selName);const hasPts=cd.pts>0;
+      // Char info
+      ctx.fillStyle=team.color;ctx.font="bold 11px 'Malgun Gothic',sans-serif";ctx.textAlign='left';
+      ctx.fillText(`${selName} (${team.name})`,8,panelY+15);
+      ctx.fillStyle='#AACCEE';ctx.font="9px 'Malgun Gothic',sans-serif";
+      ctx.fillText(`Lv.${cd.level}  HP:${st.maxHp}  공격:${st.dmg}  크리:${Math.round(st.crit*100)}%  회피:${Math.round(st.dodge*100)}%`,8,panelY+27);
+      ctx.fillStyle=team.color;ctx.textAlign='right';
+      ctx.fillText(`🚀 ${team.missileNames[evo-1]} (${['I','II','III'][evo-1]}단계)`,CW-8,panelY+21);
+      if(hasPts){ctx.fillStyle='#FFFF44';ctx.font="bold 9px 'Malgun Gothic',sans-serif";ctx.textAlign='center';
+        ctx.fillText(`⚡ 미배분 포인트 ${cd.pts}개!`,CW/2,panelY+37);}
+      // Buttons
+      const btnY=panelY+40;
+      ctx.save();ctx.shadowBlur=10;ctx.shadowColor='#FFD700';
+      ctx.fillStyle='#FFD700';ctx.beginPath();ctx.roundRect(60,btnY,140,28,6);ctx.fill();ctx.restore();
+      ctx.fillStyle='#000';ctx.font="bold 13px 'Malgun Gothic',sans-serif";ctx.textAlign='center';
+      ctx.fillText('▶ 시작',130,btnY+19);
+      ctx.save();if(hasPts){ctx.shadowBlur=8;ctx.shadowColor='#FFFF44';}
+      ctx.fillStyle=hasPts?'#FFFF22':'#334455';
+      ctx.beginPath();ctx.roundRect(210,btnY,210,28,6);ctx.fill();ctx.restore();
+      ctx.fillStyle=hasPts?'#000':'#778899';
+      ctx.font=`${hasPts?'bold ':''}11px 'Malgun Gothic',sans-serif`;ctx.textAlign='center';
+      ctx.fillText(`⚡ 능력치 배분${hasPts?` (${cd.pts})`:''}`,315,btnY+19);
+      // Click handling
+      if(mouse.clicked){
+        if(state.hoveredChar>=0) state.selectedChar=state.hoveredChar;
+        if(mouse.x>=60&&mouse.x<=200&&mouse.y>=btnY&&mouse.y<=btnY+28){ startGame();mouse.clicked=false;return; }
+        if(mouse.x>=210&&mouse.x<=420&&mouse.y>=btnY&&mouse.y<=btnY+28){
+          state.statAllocChar=getCharByIndex(state.selectedChar);
+          statAllocPending=null;state.current='statAlloc';mouse.clicked=false;return;
+        }
+        mouse.clicked=false;
+      }
+    } else { if(mouse.clicked){if(state.hoveredChar>=0)state.selectedChar=state.hoveredChar;mouse.clicked=false;} }
   } else {
-    ctx.fillStyle='#2a3a4a'; ctx.beginPath(); ctx.roundRect(170,432,146,36,7); ctx.fill();
-    ctx.fillStyle='#556677'; ctx.font="bold 14px 'Malgun Gothic',sans-serif"; ctx.textAlign='center';
-    ctx.fillText('레인져 선택 필요',CW/2,456);
-    ctx.fillStyle='#2a3040'; ctx.beginPath(); ctx.roundRect(326,432,132,36,7); ctx.fill();
-    ctx.fillStyle='#445566'; ctx.font="13px 'Malgun Gothic',sans-serif"; ctx.textAlign='center';
-    ctx.fillText('⚡능력치 배분',392,456);
+    ctx.fillStyle='#556677';ctx.font="12px 'Malgun Gothic',sans-serif";ctx.textAlign='center';
+    ctx.fillText('레인져를 선택하세요',CW/2,panelY+22);
+    if(mouse.clicked){if(state.hoveredChar>=0)state.selectedChar=state.hoveredChar;mouse.clicked=false;}
   }
 
-  ctx.fillStyle='#445566'; ctx.font="10px 'Malgun Gothic',sans-serif"; ctx.textAlign='center';
-  ctx.fillText('방향키/WASD이동  스페이스/Z발사  X폭탄  장애물도 파괴 가능!',CW/2,538);
+  // Secret hint + user info
+  ctx.fillStyle='rgba(150,50,200,0.4)';ctx.font="8px 'Malgun Gothic',sans-serif";ctx.textAlign='center';
+  ctx.fillText('비밀코드: →→→←←←↓↓↓↑↑↑',CW/2,CH-4);
+  if(currentUser){ctx.fillStyle='#445566';ctx.font="9px 'Malgun Gothic',sans-serif";ctx.textAlign='left';ctx.fillText(`👤 ${currentUser}`,6,CH-4);}
 
-  // Secret message
+  // Secret unlock message
   if(secretMsg>0){
     ctx.save();ctx.globalAlpha=Math.min(1,secretMsg/30);
-    ctx.fillStyle='rgba(80,0,100,0.85)';ctx.beginPath();ctx.roundRect(80,555,320,55,8);ctx.fill();
+    ctx.fillStyle='rgba(80,0,100,0.9)';ctx.beginPath();ctx.roundRect(60,panelY-50,360,44,8);ctx.fill();
     ctx.shadowBlur=15;ctx.shadowColor='#FF88FF';
-    ctx.fillStyle='#FF88FF';ctx.font="bold 16px 'Malgun Gothic',sans-serif";ctx.textAlign='center';
-    ctx.fillText('비밀 레인져 이선빈 해금!',CW/2,576);
-    ctx.fillStyle='#FFAAFF';ctx.font="12px 'Malgun Gothic',sans-serif";
-    ctx.fillText('특수 능력치로 참전합니다!',CW/2,596);
-    ctx.restore();
-    secretMsg--;
+    ctx.fillStyle='#FF88FF';ctx.font="bold 14px 'Malgun Gothic',sans-serif";ctx.textAlign='center';
+    ctx.fillText('비밀 레인져 이선빈 해금!',CW/2,panelY-30);
+    ctx.fillStyle='#FFAAFF';ctx.font="10px 'Malgun Gothic',sans-serif";
+    ctx.fillText('경영지원팀 참전!',CW/2,panelY-14);
+    ctx.restore();secretMsg--;
   }
   if(unlockMsg>0){
     ctx.save();ctx.globalAlpha=Math.min(1,unlockMsg/30);
-    ctx.fillStyle='rgba(0,40,80,0.85)';ctx.beginPath();ctx.roundRect(60,555,360,55,8);ctx.fill();
+    ctx.fillStyle='rgba(0,40,80,0.9)';ctx.beginPath();ctx.roundRect(40,panelY-50,400,44,8);ctx.fill();
     ctx.shadowBlur=15;ctx.shadowColor='#44AAFF';
-    ctx.fillStyle='#44AAFF';ctx.font="bold 16px 'Malgun Gothic',sans-serif";ctx.textAlign='center';
-    ctx.fillText('새 레인져 해금!',CW/2,576);
-    ctx.fillStyle='#88CCFF';ctx.font="12px 'Malgun Gothic',sans-serif";
-    ctx.fillText('모든 스테이지 클리어 달성!',CW/2,596);
-    ctx.restore();
-    unlockMsg--;
+    ctx.fillStyle='#44AAFF';ctx.font="bold 14px 'Malgun Gothic',sans-serif";ctx.textAlign='center';
+    ctx.fillText('설계안전팀·시설안전팀 해금!',CW/2,panelY-30);
+    ctx.fillStyle='#88CCFF';ctx.font="10px 'Malgun Gothic',sans-serif";
+    ctx.fillText('모든 스테이지 클리어 달성!',CW/2,panelY-14);
+    ctx.restore();unlockMsg--;
   }
   ctx.textAlign='left';
 }
@@ -1964,13 +2163,14 @@ function drawStatAllocScreen(){
   ctx.fillText(hasPts?`⚡ 포인트 ${sp.pts}개 배분 가능`:'포인트 없음 (조회 전용)',CW/2,187);
 
   // Stats table
+  const _team=getTeam(name);
   const statDefs=[
     {key:'sStr', icon:'⚔', label:'힘(攻)', color:'#FF8844',
-     desc:(v)=>`데미지 ${1+(tier==='secret'?3:tier==='unlocked'?2:1)+v} (기본+${v})`},
+     desc:(v)=>`데미지 ${_team.stats.dmg+v} (기본+${v})`},
     {key:'sHp',  icon:'💚', label:'체력(防)', color:'#44FF88',
-     desc:(v)=>`최대HP ${(tier==='secret'?110:tier==='unlocked'?80:60)+v*30} (+${v*30})`},
+     desc:(v)=>`최대HP ${_team.stats.maxHp+v*30} (+${v*30})`},
     {key:'sLuck',icon:'🍀', label:'운(運)',   color:'#FFDD44',
-     desc:(v)=>`크리 ${Math.round((0.05+v*0.03)*100)}%  회피 ${Math.round((0.10+v*0.02)*100)}%`}
+     desc:(v)=>`크리 ${Math.round((0.05+_team.stats.luck*0.01+v*0.03)*100)}%  회피 ${Math.round((0.10+_team.stats.luck*0.01+v*0.02)*100)}%`}
   ];
 
   statDefs.forEach((s,i)=>{
@@ -2124,16 +2324,15 @@ function startGame(){ initGame(); state.current='playing'; mouse.clicked=false; 
 
 // ===== MAIN UPDATE =====
 function updateGame(){
-  bgY+=1.0;
-  updateObstaclePositions(); // keep screenY in sync every frame
+  updateObstaclePositions(); // update obstacle screenY each frame
   if(state.waveBannerTimer>0){
     state.waveBannerTimer--;
     if(state.waveBannerTimer===55) waveManager.load(state.wave);
   }
   if(state.current!=='playing') return;
   player.update();
-  const b=player.tryShoot();
-  if(b) bullets.push(b);
+  const bs=player.tryShoot();
+  if(bs) bs.forEach(b=>bullets.push(b));
   // Bomb key
   const bkNow=keys['KeyX'];
   if(bkNow&&!prevBombKey) useBomb();
@@ -2147,7 +2346,7 @@ function updateGame(){
     if(shots&&bullets.filter(b=>b.isEnemy&&b.active).length<20)
       (Array.isArray(shots)?shots:[shots]).forEach(s=>bullets.push(s));
   });
-  bullets.forEach(b=>b.update());
+  bullets.forEach(b=>b.update(enemies));
   explosions.forEach(e=>e.update());
   bombItems.forEach(bi=>bi.update());
   checkCollisions();
@@ -2176,7 +2375,6 @@ function gameLoop(){
       break;
     case 'charSelect':
       bgY+=0.5;
-      drawBackground(1);
       drawCharSelectScreen();
       break;
     case 'playing':
